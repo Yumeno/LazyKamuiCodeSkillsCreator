@@ -1,0 +1,12 @@
+# Claude Code local settings
+.claude/settings.local.json
+
+# Old directory
+old/
+
+# Output directory
+output/
+
+# MCP and tools files
+mcp*.json
+tools*
