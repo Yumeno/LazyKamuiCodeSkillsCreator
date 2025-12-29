@@ -691,7 +691,7 @@ print(f"Download URL: {{result['url']}}")
 ## References
 
 - MCP Config: `references/mcp.json`
-- Tool Specs: `references/tools.json`
+- Tool Specs: `{"references/tools/" + skill_name + ".yaml" if lazy else "references/tools.json"}`
 """
     return skill_md
 
@@ -757,13 +757,13 @@ RESULT_TOOL = "{pattern['result'][0] if pattern['result'] else 'result'}"
 ID_PARAM_NAME = "{id_param_name}"
 
 
-def run(arguments: dict, output_path: str = "./output", **kwargs) -> dict:
+def run(arguments: dict, output_dir: str = "./output", **kwargs) -> dict:
     """
     Run {skill_name} job with given arguments.
 
     Args:
         arguments: Tool input arguments
-        output_path: Where to save output files
+        output_dir: Where to save output files
         **kwargs: Additional options (poll_interval, max_polls, headers, id_param_name)
 
     Returns:
@@ -776,7 +776,7 @@ def run(arguments: dict, output_path: str = "./output", **kwargs) -> dict:
         submit_args=arguments,
         status_tool=kwargs.get("status_tool", STATUS_TOOL),
         result_tool=kwargs.get("result_tool", RESULT_TOOL),
-        output_path=output_path,
+        output_dir=output_dir,
         poll_interval=kwargs.get("poll_interval", 2.0),
         max_polls=kwargs.get("max_polls", 300),
         headers=headers,
