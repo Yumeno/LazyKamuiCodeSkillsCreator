@@ -20,6 +20,7 @@ Claude Code用のMCPスキルジェネレーター。非同期ジョブパター
 | **拡張子自動検出** | Content-Type、URL、ユーザー指定の優先順位で拡張子を決定 | 自動 | [📖](docs/output-path-strategy.md) |
 | **重複ファイル回避** | 同名ファイル存在時にサフィックス自動付与（`_1`, `_2`...） | 自動 | [📖](docs/output-path-strategy.md) |
 | **ログ保存** | リクエスト/レスポンスJSONを保存（logsフォルダまたはインライン） | `--save-logs`, `--save-logs-inline` | [📖](docs/output-path-strategy.md) |
+| **複数ファイル対応** | レスポンス内の全URLを再帰探索し一括ダウンロード。連番サフィックス自動付与 | 自動 | [📖](docs/output-path-strategy.md) |
 
 ### 機能比較
 

@@ -342,3 +342,151 @@ python mcp_async_call.py \
 # ./my_project/assets/abc12345_20250629_143052_request.json
 # ./my_project/assets/abc12345_20250629_143052_response.json
 ```
+
+## 複数ファイル対応
+
+### 背景・課題
+
+一部のMCPサーバーは、1回のリクエストで複数のファイルを生成して返します：
+
+- 画像生成: 「4枚生成して」→ 4つのURL
+- 動画処理: 複数フォーマット出力
+- オーディオ: 複数トラック出力
+
+オリジナル実装では最初の1ファイルのみダウンロードしていました。
+
+### 解決アプローチ
+
+レスポンス全体を再帰的に探索し、全てのURLを抽出してダウンロード：
+
+```python
+def extract_download_urls(result: dict) -> list[str]:
+    """Recursively extract all URLs from result."""
+    urls = []
+    seen = set()
+
+    def _extract(obj):
+        if isinstance(obj, str):
+            if obj.startswith(("http://", "https://")) and obj not in seen:
+                seen.add(obj)
+                urls.append(obj)
+            elif obj.startswith("{") or obj.startswith("["):
+                try:
+                    parsed = json.loads(obj)
+                    _extract(parsed)
+                except json.JSONDecodeError:
+                    pass
+        elif isinstance(obj, list):
+            for item in obj:
+                _extract(item)
+        elif isinstance(obj, dict):
+            for value in obj.values():
+                _extract(value)
+
+    _extract(result)
+    return urls
+```
+
+**特徴:**
+- キー名に依存しない（`images`, `videos`, `outputs`等を個別指定不要）
+- 任意のネスト構造に対応
+- JSON文字列内のURLも再帰的に探索
+- 重複URLは自動排除
+
+### ファイル名の連番付与
+
+複数ファイル時は自動でサフィックスを付与：
+
+| ケース | 入力 | 出力 |
+|-------|------|------|
+| `--output-file result.png` + 4枚 | - | `result_1.png`, `result_2.png`, `result_3.png`, `result_4.png` |
+| `--auto-filename` + 4枚 | - | `abc123_20250629_1.png`, `..._2.png`, `..._3.png`, `..._4.png` |
+| 指定なし + 4枚 | - | URLから推測 + 重複回避サフィックス |
+
+### 実装詳細
+
+```python
+# run_async_mcp_job内
+download_urls = extract_download_urls(result_resp)
+
+saved_paths = []
+for i, url in enumerate(download_urls):
+    print(f"[DOWNLOAD] ({i + 1}/{len(download_urls)}) {url}")
+
+    # 複数ファイル時はインデックスサフィックスを付与
+    current_output_file = output_file
+    if output_file and len(download_urls) > 1:
+        base, ext = os.path.splitext(output_file)
+        current_output_file = f"{base}_{i + 1}{ext}"
+
+    saved_path = download_file(
+        url=url,
+        output_dir=output_dir,
+        output_file=current_output_file,
+        ...
+    )
+    saved_paths.append(saved_path)
+```
+
+### 戻り値
+
+```python
+{
+    "request_id": "abc123",
+    "status": "completed",
+
+    # 複数ファイル対応（リスト）
+    "download_urls": ["url1", "url2", "url3", "url4"],
+    "saved_paths": ["./output/result_1.png", "./output/result_2.png", ...],
+
+    # 後方互換（最初のファイル）
+    "download_url": "url1",
+    "saved_path": "./output/result_1.png",
+
+    "log_paths": [...]
+}
+```
+
+### 使用例
+
+```bash
+# 4枚の画像を生成
+python mcp_async_call.py \
+  --endpoint "https://mcp.example.com/sse" \
+  --submit-tool "generate_images" \
+  --status-tool "status" \
+  --result-tool "result" \
+  --args '{"prompt": "a cat", "num_images": 4}' \
+  --output ./downloads \
+  --output-file cat.png
+
+# 出力:
+# [DOWNLOAD] (1/4) https://...
+# [DOWNLOAD] Saved to: ./downloads/cat_1.png
+# [DOWNLOAD] (2/4) https://...
+# [DOWNLOAD] Saved to: ./downloads/cat_2.png
+# [DOWNLOAD] (3/4) https://...
+# [DOWNLOAD] Saved to: ./downloads/cat_3.png
+# [DOWNLOAD] (4/4) https://...
+# [DOWNLOAD] Saved to: ./downloads/cat_4.png
+```
+
+## 注意事項
+
+### パス解決の基準
+
+相対パス（`./output`等）は**pythonコマンド実行時のカレントディレクトリ**を基準に解決されます。
+
+```bash
+# プロジェクトルートから実行
+cd /project
+python .claude/skills/my-skill/scripts/mcp_async_call.py --output ./downloads
+# → /project/downloads/ に保存
+
+# スキルディレクトリから実行
+cd /project/.claude/skills/my-skill
+python scripts/mcp_async_call.py --output ./downloads
+# → /project/.claude/skills/my-skill/downloads/ に保存
+```
+
+**推奨:** 意図した場所に保存するには、絶対パスを使用するか、適切なディレクトリから実行してください。
