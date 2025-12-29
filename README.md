@@ -13,6 +13,47 @@ Claude Code用のMCPスキルジェネレーター。非同期ジョブパター
 - 非同期MCPツールの呼び出し：submit → ステータスポーリング → 結果取得 → ダウンロード
 - 画像/動画生成MCP（fal.ai、Replicateなど）の統合
 
+## セットアップ
+
+### 1. リポジトリをクローン
+
+```bash
+git clone https://github.com/Yumeno/LazyKamuiCodeSkillsCreator.git
+cd LazyKamuiCodeSkillsCreator
+```
+
+### 2. 依存パッケージをインストール
+
+```bash
+pip install pyyaml requests
+```
+
+### 3. スキルを生成
+
+```bash
+# カタログから自動取得（推奨）
+python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
+  -m /path/to/your/.mcp.json
+
+# Lazyモードで生成（コンテキスト節約）
+python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
+  -m /path/to/your/.mcp.json \
+  --lazy
+```
+
+### 4. 生成されたスキルの場所
+
+```
+.claude/skills/<skill-name>/
+├── SKILL.md              # 使用方法ドキュメント
+├── scripts/
+│   ├── mcp_async_call.py # コア非同期コーラー
+│   └── <skill_name>.py   # 便利ラッパー
+└── references/
+    ├── mcp.json          # 元のMCPコンフィグ
+    └── tools.json        # 元のツール仕様
+```
+
 ## クイックスタート
 
 ### MCPコンフィグからスキルを生成（推奨）
