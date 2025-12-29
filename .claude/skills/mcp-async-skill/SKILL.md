@@ -43,13 +43,39 @@ The returned URL (e.g., `https://v3b.fal.media/files/...`) can be used in `image
 Tool information is automatically fetched from `mcp_tool_catalog.yaml`:
 
 ```bash
+# Generate skills for ALL servers in mcp.json
 python scripts/generate_skill.py \
   --mcp-config /path/to/.mcp.json
+
+# Generate skill for specific server(s) only
+python scripts/generate_skill.py \
+  --mcp-config /path/to/.mcp.json \
+  -s fal-ai/flux-lora
+
+# Generate multiple specific servers
+python scripts/generate_skill.py \
+  --mcp-config /path/to/.mcp.json \
+  -s server1 -s server2
 ```
 
 Output: `.claude/skills/<skill-name>/SKILL.md`
 
 The server name in `.mcp.json` is used to look up tools from the catalog.
+
+### Lazy Mode (Context-Saving)
+
+For MCPs with many tools, use `--lazy` to minimize initial context consumption:
+
+```bash
+python scripts/generate_skill.py \
+  --mcp-config /path/to/.mcp.json \
+  --lazy
+```
+
+In lazy mode:
+- SKILL.md contains only tool names and descriptions (no parameter details)
+- Full tool definitions are stored in `references/tools/<skill>.yaml`
+- AI reads YAML before execution to get parameters
 
 ### Generate Skill with Legacy tools.info
 
@@ -111,23 +137,33 @@ All MCP calls use this structure:
 
 ### .mcp.json
 
-The server `name` must match a server `id` in the catalog:
+**Multi-server format (recommended):**
 
 ```json
 {
   "mcpServers": {
-    "t2i-kamui-fal-flux-lora": {
-      "type": "http",
-      "url": "https://kamui-code.ai/t2i/fal/flux-lora",
+    "fal-ai/flux-lora": {
+      "url": "https://mcp.example.com/flux-lora/sse",
       "headers": {
-        "KAMUI-CODE-PASS": "your-pass"
+        "Authorization": "Bearer xxx"
+      }
+    },
+    "fal-ai/video-enhance": {
+      "url": "https://mcp.example.com/video-enhance/sse",
+      "headers": {
+        "Authorization": "Bearer xxx"
       }
     }
   }
 }
 ```
 
-Or direct format:
+With multi-server format:
+- `python generate_skill.py -m mcp.json` → Generates skills for ALL servers
+- `python generate_skill.py -m mcp.json -s fal-ai/flux-lora` → Generates only specified server
+- `python generate_skill.py -m mcp.json -s server1 -s server2` → Multiple servers
+
+**Single-server format:**
 
 ```json
 {
@@ -207,10 +243,12 @@ Generate complete Skill from MCP specifications.
 
 **Options:**
 - `--mcp-config, -m`: Path to .mcp.json (required)
-- `--tools-info, -t`: Path to tools.info (optional, legacy mode)
+- `--servers, -s`: Server name(s) to generate (can specify multiple, default: all)
+- `--tools-info, -t`: Path to tools.info (legacy mode, single server only)
 - `--output, -o`: Output directory
-- `--name, -n`: Skill name (auto-detected if omitted)
+- `--name, -n`: Skill name (auto-detected if omitted, single server only)
 - `--catalog-url`: Custom catalog URL (default: GitHub raw URL)
+- `--lazy, -l`: Generate minimal SKILL.md (tool definitions in references/tools/*.yaml)
 
 **Requirements:**
 - `pip install pyyaml requests` (for catalog fetching)
@@ -219,16 +257,29 @@ Generate complete Skill from MCP specifications.
 
 Skills are generated to `.claude/skills/<skill-name>/`:
 
+**Normal mode:**
 ```
-.claude/skills/
-└── skill-name/
-    ├── SKILL.md              # Usage documentation
-    ├── scripts/
-    │   ├── mcp_async_call.py # Core async caller
-    │   └── skill_name.py     # Convenience wrapper
-    └── references/
-        ├── mcp.json          # Original MCP config
-        └── tools.json        # Original tool specs
+.claude/skills/<skill-name>/
+├── SKILL.md              # Usage documentation (full tool details)
+├── scripts/
+│   ├── mcp_async_call.py # Core async caller
+│   └── skill_name.py     # Convenience wrapper
+└── references/
+    ├── mcp.json          # Original MCP config
+    └── tools.json        # Original tool specs
+```
+
+**Lazy mode (`--lazy`):**
+```
+.claude/skills/<skill-name>/
+├── SKILL.md              # Usage documentation (minimal)
+├── scripts/
+│   ├── mcp_async_call.py # Core async caller
+│   └── skill_name.py     # Convenience wrapper
+└── references/
+    ├── mcp.json          # Original MCP config
+    └── tools/
+        └── <skill-name>.yaml  # Tool definitions + usage examples (YAML)
 ```
 
 ## Common Status Values
