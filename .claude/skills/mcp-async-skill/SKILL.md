@@ -232,10 +232,27 @@ Main async MCP caller with full flow automation.
 - `--args, -a`: Submit arguments as JSON string
 - `--args-file`: Load arguments from JSON file
 - `--output, -o`: Output directory (default: ./output)
+- `--output-file, -O`: Output file path (overrides auto filename, allows overwrite)
+- `--auto-filename`: Use `{request_id}_{timestamp}.{ext}` format
 - `--poll-interval`: Seconds between polls (default: 2.0)
 - `--max-polls`: Maximum poll attempts (default: 300)
 - `--header`: Add custom header (format: `Key:Value`)
 - `--config, -c`: Load endpoint from .mcp.json
+- `--save-logs`: Save request/response logs to `{output}/logs/`
+- `--save-logs-inline`: Save logs alongside output file as `{filename}_*.json`
+
+**File Extension Detection:**
+
+Extension is determined in this order:
+1. User-specified via `--output-file`
+2. `Content-Type` header from download response
+3. URL path extension
+4. Warning if none detected
+
+**Duplicate File Avoidance:**
+
+When `--output-file` is not specified, existing files are not overwritten. A suffix is added:
+- `output.png` → `output_1.png` → `output_2.png`
 
 ### `scripts/generate_skill.py`
 
