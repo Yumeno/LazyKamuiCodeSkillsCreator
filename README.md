@@ -9,19 +9,17 @@ Claude Code用のMCPスキルジェネレーター。非同期ジョブパター
 
 オリジナル版からの主な機能追加：
 
-| 機能 | 説明 | オプション |
-|-----|------|----------|
-| **Lazyモード** | SKILL.mdを軽量化し、ツール定義を外部YAMLファイルに分離。初期コンテキスト消費を大幅削減 | `--lazy` |
-| **複数サーバー対応** | 1つのmcp.jsonから複数サーバーのスキルを一括生成。個別指定も可能 | `--servers` |
-| **YAML形式出力** | ツール定義をLLMフレンドリーなYAML形式で出力。`_usage`セクションに実行例を含む | Lazyモード時自動 |
-| **スキーマ詳細保持** | enum/default/min/max等のJSON Schema情報を完全保持。LLMがパラメータ制約を理解可能に | 自動 |
-| **出力ファイル指定** | ディレクトリとファイルパスを別々に指定可能。ファイル名のみ指定で組み合わせ | `--output-file` |
-| **自動ファイル命名** | `{request_id}_{timestamp}.{ext}` 形式でユニークなファイル名を自動生成 | `--auto-filename` |
-| **拡張子自動検出** | Content-Type、URL、ユーザー指定の優先順位で拡張子を決定 | 自動 |
-| **重複ファイル回避** | 同名ファイル存在時にサフィックス自動付与（`_1`, `_2`...） | 自動 |
-| **ログ保存** | リクエスト/レスポンスJSONを保存（logsフォルダまたはインライン） | `--save-logs`, `--save-logs-inline` |
-
-> 📖 詳細ドキュメント: [Lazyモード](docs/lazy-mode.md) | [出力パス戦略](docs/output-path-strategy.md) | [スキーマ詳細](docs/schema-passthrough.md)
+| 機能 | 説明 | オプション | 詳細 |
+|-----|------|----------|------|
+| **Lazyモード** | SKILL.mdを軽量化し、ツール定義を外部YAMLファイルに分離。初期コンテキスト消費を大幅削減 | `--lazy` | [📖](docs/lazy-mode.md) |
+| **複数サーバー対応** | 1つのmcp.jsonから複数サーバーのスキルを一括生成。個別指定も可能 | `--servers` | [📖](docs/lazy-mode.md) |
+| **YAML形式出力** | ツール定義をLLMフレンドリーなYAML形式で出力。`_usage`セクションに実行例を含む | Lazyモード時自動 | [📖](docs/lazy-mode.md) |
+| **スキーマ詳細保持** | enum/default/min/max等のJSON Schema情報を完全保持。LLMがパラメータ制約を理解可能に | 自動 | [📖](docs/schema-passthrough.md) |
+| **出力ファイル指定** | ディレクトリとファイルパスを別々に指定可能。ファイル名のみ指定で組み合わせ | `--output-file` | [📖](docs/output-path-strategy.md) |
+| **自動ファイル命名** | `{request_id}_{timestamp}.{ext}` 形式でユニークなファイル名を自動生成 | `--auto-filename` | [📖](docs/output-path-strategy.md) |
+| **拡張子自動検出** | Content-Type、URL、ユーザー指定の優先順位で拡張子を決定 | 自動 | [📖](docs/output-path-strategy.md) |
+| **重複ファイル回避** | 同名ファイル存在時にサフィックス自動付与（`_1`, `_2`...） | 自動 | [📖](docs/output-path-strategy.md) |
+| **ログ保存** | リクエスト/レスポンスJSONを保存（logsフォルダまたはインライン） | `--save-logs`, `--save-logs-inline` | [📖](docs/output-path-strategy.md) |
 
 ### 機能比較
 
