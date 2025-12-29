@@ -6,19 +6,44 @@ Claude Code用のMCPスキルジェネレーター。非同期ジョブパター
 
 このツールは以下の用途に使用できます：
 
-- `.mcp.json` + `tools.info` からパッケージ化されたスキルを生成
+- `.mcp.json` からパッケージ化されたスキルを生成（ツール情報はカタログから自動取得）
 - 非同期MCPツールの呼び出し：submit → ステータスポーリング → 結果取得 → ダウンロード
 - 画像/動画生成MCP（fal.ai、Replicateなど）の統合
 
 ## クイックスタート
 
-### MCPコンフィグからスキルを生成
+### MCPコンフィグからスキルを生成（推奨）
+
+ツール情報は `mcp_tool_catalog.yaml` から自動取得されます：
+
+```bash
+python scripts/generate_skill.py \
+  --mcp-config /path/to/.mcp.json
+```
+
+### Lazyモード（コンテキスト節約）
+
+ツール数が多いMCPサーバーでは、`--lazy` オプションで初期コンテキスト消費を削減できます：
+
+```bash
+python scripts/generate_skill.py \
+  --mcp-config /path/to/.mcp.json \
+  --lazy
+```
+
+**Lazyモードの動作:**
+- SKILL.md にはツール名と説明のみを記載（パラメータ詳細は省略）
+- AIは実行前に `references/tools.json` を読み込んで詳細を確認
+- 初期ロード時のトークン消費を大幅に削減
+
+### レガシーモード（tools.info使用）
+
+ローカルの `tools.info` ファイルを使用する場合：
 
 ```bash
 python scripts/generate_skill.py \
   --mcp-config /path/to/.mcp.json \
   --tools-info /path/to/tools.info \
-  --output ./output \
   --name my-mcp-skill
 ```
 
@@ -117,10 +142,12 @@ MCP仕様から完全なスキルを生成。
 **オプション:**
 | オプション | 説明 |
 |-----------|------|
-| `--mcp-config, -m` | .mcp.jsonへのパス |
-| `--tools-info, -t` | tools.infoへのパス |
-| `--output, -o` | 出力ディレクトリ |
+| `--mcp-config, -m` | .mcp.jsonへのパス（必須） |
+| `--tools-info, -t` | tools.infoへのパス（レガシーモード、省略時はカタログから取得） |
+| `--output, -o` | 出力ディレクトリ（デフォルト: .claude/skills） |
 | `--name, -n` | スキル名（省略時は自動検出） |
+| `--catalog-url` | カタログYAMLのURL（デフォルト: GitHub） |
+| `--lazy, -l` | 最小限のSKILL.mdを生成（ツール定義は references/tools.json に委譲） |
 
 ## 生成されるスキル構造
 
@@ -172,6 +199,46 @@ print(result["saved_path"])  # ダウンロードしたファイルへのパス
 - ダウンロード失敗
 
 すべてのエラーは説明的なメッセージを含む例外を発生させます。
+
+## Lazyモード詳細
+
+### 通常モード vs Lazyモード
+
+| 項目 | 通常モード | Lazyモード |
+|-----|-----------|-----------|
+| SKILL.mdのサイズ | 大（パラメータ詳細含む） | 小（名前+説明のみ） |
+| 初期トークン消費 | 高 | 極小 |
+| ツール実行までのステップ | 即実行可能 | +1ターン（JSON読み込み） |
+| 推奨用途 | ツール数が少ない場合 | ツール数が多い場合 |
+
+### Lazyモードの使用フロー
+
+1. ユーザーがAIに指示（例：「画像を生成して」）
+2. AIがSKILL.mdを確認し、該当ツールを特定
+3. AIが `references/tools.json` を読み込んでパラメータを確認
+4. AIがツールを実行
+
+### 生成されるSKILL.mdの例（Lazyモード）
+
+```markdown
+## Available Tools
+
+> **Note:** Detailed tool definitions are NOT included in this document to save context window.
+> Before executing any tool, you MUST read the full specification from `references/tools.json`.
+
+**Quick reference** (name and description only):
+
+- **flux_lora_submit**: Submit Flux LoRA image generation request
+- **flux_lora_status**: Check job status
+- **flux_lora_result**: Get generation result
+
+### How to Use Tools
+
+1. **Read tool specification**: Use Read tool on `references/tools.json`
+2. **Find specific tool**: Search for tool name in the JSON
+3. **Check required parameters** (marked in `required` array) and schema
+4. **Execute** using `scripts/mcp_async_call.py` with appropriate arguments
+```
 
 ## ライセンス
 
