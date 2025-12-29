@@ -240,6 +240,39 @@ def detect_media_type(tools: list[dict]) -> str | None:
     return None
 
 
+def convert_tools_to_yaml_dict(tools: list[dict]) -> dict:
+    """Convert tools list to a compact YAML-friendly dict structure.
+
+    Args:
+        tools: List of tool definitions
+
+    Returns:
+        Dict with tool names as keys and compact tool info as values
+    """
+    result = {}
+    for tool in tools:
+        name = tool.get("name", "")
+        schema = tool.get("inputSchema", tool.get("parameters", {}))
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+
+        # Build compact parameter structure
+        params = {}
+        for pname, pspec in properties.items():
+            params[pname] = {
+                "type": pspec.get("type", "any"),
+                "description": pspec.get("description", ""),
+            }
+
+        result[name] = {
+            "description": tool.get("description", ""),
+            "required": required,
+            "parameters": params,
+        }
+
+    return result
+
+
 def get_required_params_example(tools: list[dict]) -> str:
     """Get example JSON with required parameters from submit tool."""
     for tool in tools:
@@ -296,10 +329,11 @@ def generate_skill_md(mcp_config: dict, tools: list[dict], skill_name: str, lazy
             desc = tool.get("description", "")
             tool_list.append(f"- **{name}**: {desc}")
 
+        yaml_file = f"references/tools/{skill_name}.yaml"
         tool_docs_section = f"""## Available Tools
 
 > **Note:** Detailed tool definitions are NOT included in this document to save context window.
-> Before executing any tool, you MUST read the full specification from `references/tools.json`.
+> Before executing any tool, you MUST read the full specification from `{yaml_file}`.
 
 **Quick reference** (name and description only):
 
@@ -307,10 +341,9 @@ def generate_skill_md(mcp_config: dict, tools: list[dict], skill_name: str, lazy
 
 ### How to Use Tools
 
-1. **Read tool specification**: Use Read tool on `references/tools.json`
-2. **Find specific tool**: Search for tool name in the JSON
-3. **Check required parameters** (marked in `required` array) and schema
-4. **Execute** using `scripts/mcp_async_call.py` with appropriate arguments
+1. **Read tool specification**: Use Read tool on `{yaml_file}`
+2. **Find the tool** you need and check its `required` parameters
+3. **Execute** using `scripts/mcp_async_call.py` with appropriate arguments
 """
     else:
         # Full mode: existing behavior with detailed parameters
@@ -756,17 +789,48 @@ def generate_skill(
 
     # Save original configs as references
     (references_dir / "mcp.json").write_text(json.dumps(mcp_config, indent=2, ensure_ascii=False), encoding='utf-8')
-    (references_dir / "tools.json").write_text(json.dumps(tools, indent=2, ensure_ascii=False), encoding='utf-8')
 
-    print(f"\n✓ Skill generated: {skill_dir}")
-    print(f"  {skill_dir}/")
-    print(f"  ├── SKILL.md")
-    print(f"  ├── scripts/")
-    print(f"  │   ├── mcp_async_call.py")
-    print(f"  │   └── {skill_name.replace('-', '_')}.py")
-    print(f"  └── references/")
-    print(f"      ├── mcp.json")
-    print(f"      └── tools.json")
+    if lazy:
+        # Lazy mode: save as YAML in tools/ directory
+        tools_dir = references_dir / "tools"
+        os.makedirs(tools_dir, exist_ok=True)
+
+        # Convert to compact YAML structure
+        yaml_data = convert_tools_to_yaml_dict(tools)
+        yaml_filename = f"{skill_name}.yaml"
+
+        if yaml is None:
+            print("Warning: pyyaml not installed, falling back to JSON format", file=sys.stderr)
+            (tools_dir / f"{skill_name}.json").write_text(
+                json.dumps(yaml_data, indent=2, ensure_ascii=False), encoding='utf-8'
+            )
+        else:
+            yaml_content = yaml.dump(yaml_data, allow_unicode=True, default_flow_style=False, sort_keys=False)
+            (tools_dir / yaml_filename).write_text(yaml_content, encoding='utf-8')
+
+        print(f"\n✓ Skill generated (lazy mode): {skill_dir}")
+        print(f"  {skill_dir}/")
+        print(f"  ├── SKILL.md")
+        print(f"  ├── scripts/")
+        print(f"  │   ├── mcp_async_call.py")
+        print(f"  │   └── {skill_name.replace('-', '_')}.py")
+        print(f"  └── references/")
+        print(f"      ├── mcp.json")
+        print(f"      └── tools/")
+        print(f"          └── {yaml_filename}")
+    else:
+        # Normal mode: save as JSON
+        (references_dir / "tools.json").write_text(json.dumps(tools, indent=2, ensure_ascii=False), encoding='utf-8')
+
+        print(f"\n✓ Skill generated: {skill_dir}")
+        print(f"  {skill_dir}/")
+        print(f"  ├── SKILL.md")
+        print(f"  ├── scripts/")
+        print(f"  │   ├── mcp_async_call.py")
+        print(f"  │   └── {skill_name.replace('-', '_')}.py")
+        print(f"  └── references/")
+        print(f"      ├── mcp.json")
+        print(f"      └── tools.json")
 
     return str(skill_dir)
 
