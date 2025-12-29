@@ -26,7 +26,7 @@ CATALOG_URL = "https://raw.githubusercontent.com/Yumeno/kamuicode-config-manager
 
 
 def load_mcp_config(path: str) -> dict:
-    """Load .mcp.json configuration.
+    """Load .mcp.json configuration (single server, legacy).
 
     Supports formats:
     1. Direct: {"name": "...", "url": "...", ...}
@@ -55,6 +55,41 @@ def load_mcp_config(path: str) -> dict:
             return result
 
     return data
+
+
+def load_all_mcp_servers(path: str) -> dict[str, dict]:
+    """Load all MCP server configurations from .mcp.json.
+
+    Returns:
+        Dict mapping server_name -> server_config
+    """
+    with open(path, encoding='utf-8') as f:
+        data = json.load(f)
+
+    result = {}
+
+    # Handle mcpServers wrapper format
+    if "mcpServers" in data:
+        servers = data["mcpServers"]
+        if isinstance(servers, dict):
+            for server_name, server_config in servers.items():
+                # Flatten to expected format
+                config = {"name": server_name, **server_config}
+                # Convert headers dict to auth_header/auth_value
+                if "headers" in config:
+                    headers = config.pop("headers")
+                    if isinstance(headers, dict) and headers:
+                        first_key = next(iter(headers))
+                        config["auth_header"] = first_key
+                        config["auth_value"] = headers[first_key]
+                        config["all_headers"] = headers
+                result[server_name] = config
+    else:
+        # Direct format - single server
+        name = data.get("name", "mcp-server")
+        result[name] = data
+
+    return result
 
 
 def load_tools_info(path: str) -> list[dict]:
@@ -891,6 +926,163 @@ def get_default_output_dir() -> str:
     return str(cwd_skills)
 
 
+def generate_skills_for_servers(
+    mcp_config_path: str,
+    output_dir: str,
+    server_names: list[str] | None = None,
+    catalog_url: str = CATALOG_URL,
+    lazy: bool = False,
+) -> list[str]:
+    """Generate skills for multiple servers from a single mcp.json.
+
+    Args:
+        mcp_config_path: Path to .mcp.json
+        output_dir: Output directory for generated skills
+        server_names: List of server names to process (None = all servers)
+        catalog_url: URL to mcp_tool_catalog.yaml
+        lazy: If True, generate minimal SKILL.md
+
+    Returns:
+        List of generated skill directory paths
+    """
+    all_servers = load_all_mcp_servers(mcp_config_path)
+
+    if not all_servers:
+        print("Error: No servers found in mcp.json", file=sys.stderr)
+        sys.exit(1)
+
+    # Determine which servers to process
+    if server_names:
+        # Validate specified servers exist
+        missing = set(server_names) - set(all_servers.keys())
+        if missing:
+            print(f"Error: Server(s) not found in mcp.json: {', '.join(missing)}", file=sys.stderr)
+            print(f"Available servers: {', '.join(all_servers.keys())}", file=sys.stderr)
+            sys.exit(1)
+        servers_to_process = {name: all_servers[name] for name in server_names}
+    else:
+        servers_to_process = all_servers
+
+    print(f"Processing {len(servers_to_process)} server(s): {', '.join(servers_to_process.keys())}\n")
+
+    generated_paths = []
+    for server_name, mcp_config in servers_to_process.items():
+        print(f"--- Generating skill for: {server_name} ---")
+
+        # Fetch catalog
+        catalog = fetch_catalog(catalog_url)
+        tools = load_tools_from_catalog(catalog, server_name)
+
+        if not tools:
+            print(f"Warning: No tools found for '{server_name}', skipping", file=sys.stderr)
+            continue
+
+        # Generate skill name from server name
+        skill_name = re.sub(r"[^a-z0-9-]", "-", server_name.lower())
+
+        # Generate skill
+        path = generate_skill_internal(
+            mcp_config=mcp_config,
+            tools=tools,
+            output_dir=output_dir,
+            skill_name=skill_name,
+            lazy=lazy,
+        )
+        generated_paths.append(path)
+
+    return generated_paths
+
+
+def generate_skill_internal(
+    mcp_config: dict,
+    tools: list[dict],
+    output_dir: str,
+    skill_name: str,
+    lazy: bool = False,
+) -> str:
+    """Internal function to generate a single skill (no catalog fetch).
+
+    Args:
+        mcp_config: MCP configuration dict (already loaded)
+        tools: List of tool definitions (already loaded)
+        output_dir: Output directory for generated skill
+        skill_name: Skill name
+        lazy: If True, generate minimal SKILL.md
+
+    Returns:
+        Path to generated skill directory
+    """
+    skill_dir = Path(output_dir) / skill_name
+    scripts_dir = skill_dir / "scripts"
+    references_dir = skill_dir / "references"
+
+    # Create directories
+    os.makedirs(scripts_dir, exist_ok=True)
+    os.makedirs(references_dir, exist_ok=True)
+
+    # Generate SKILL.md
+    skill_md = generate_skill_md(mcp_config, tools, skill_name, lazy=lazy)
+    (skill_dir / "SKILL.md").write_text(skill_md, encoding='utf-8')
+
+    # Copy mcp_async_call.py
+    async_script = Path(__file__).parent / "mcp_async_call.py"
+    if async_script.exists():
+        (scripts_dir / "mcp_async_call.py").write_text(async_script.read_text(encoding='utf-8'), encoding='utf-8')
+
+    # Generate wrapper script
+    wrapper = generate_wrapper_script(mcp_config, tools, skill_name)
+    wrapper_path = scripts_dir / f"{skill_name.replace('-', '_')}.py"
+    wrapper_path.write_text(wrapper, encoding='utf-8')
+    os.chmod(wrapper_path, 0o755)
+
+    # Save original configs as references
+    (references_dir / "mcp.json").write_text(json.dumps(mcp_config, indent=2, ensure_ascii=False), encoding='utf-8')
+
+    if lazy:
+        # Lazy mode: save as YAML in tools/ directory
+        tools_dir = references_dir / "tools"
+        os.makedirs(tools_dir, exist_ok=True)
+
+        # Convert to compact YAML structure
+        yaml_data = convert_tools_to_yaml_dict(tools, mcp_config, skill_name)
+        yaml_filename = f"{skill_name}.yaml"
+
+        if yaml is None:
+            print("Warning: pyyaml not installed, falling back to JSON format", file=sys.stderr)
+            (tools_dir / f"{skill_name}.json").write_text(
+                json.dumps(yaml_data, indent=2, ensure_ascii=False), encoding='utf-8'
+            )
+        else:
+            yaml_content = yaml.dump(yaml_data, allow_unicode=True, default_flow_style=False, sort_keys=False)
+            (tools_dir / yaml_filename).write_text(yaml_content, encoding='utf-8')
+
+        print(f"\n✓ Skill generated (lazy mode): {skill_dir}")
+        print(f"  {skill_dir}/")
+        print(f"  ├── SKILL.md")
+        print(f"  ├── scripts/")
+        print(f"  │   ├── mcp_async_call.py")
+        print(f"  │   └── {skill_name.replace('-', '_')}.py")
+        print(f"  └── references/")
+        print(f"      ├── mcp.json")
+        print(f"      └── tools/")
+        print(f"          └── {yaml_filename}")
+    else:
+        # Normal mode: save as JSON
+        (references_dir / "tools.json").write_text(json.dumps(tools, indent=2, ensure_ascii=False), encoding='utf-8')
+
+        print(f"\n✓ Skill generated: {skill_dir}")
+        print(f"  {skill_dir}/")
+        print(f"  ├── SKILL.md")
+        print(f"  ├── scripts/")
+        print(f"  │   ├── mcp_async_call.py")
+        print(f"  │   └── {skill_name.replace('-', '_')}.py")
+        print(f"  └── references/")
+        print(f"      ├── mcp.json")
+        print(f"      └── tools.json")
+
+    return str(skill_dir)
+
+
 def main():
     default_output = get_default_output_dir()
     parser = argparse.ArgumentParser(
@@ -898,15 +1090,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Generate skill using catalog (recommended)
-  # Output: .claude/skills/<skill-name>/SKILL.md
+  # Generate skills for ALL servers in mcp.json
   python generate_skill.py -m mcp.json
 
+  # Generate skill for specific server(s) only
+  python generate_skill.py -m mcp.json -s fal-ai/flux-lora
+  python generate_skill.py -m mcp.json -s server1 -s server2
+
   # Generate minimal SKILL.md (lazy loading mode)
-  # Tool definitions are read from references/tools.json at runtime
   python generate_skill.py -m mcp.json --lazy
 
-  # Generate skill with legacy tools.info
+  # Generate skill with legacy tools.info (single server only)
   python generate_skill.py -m mcp.json -t tools.info
 
   # Use custom catalog URL
@@ -917,24 +1111,41 @@ Examples:
 """
     )
     parser.add_argument("--mcp-config", "-m", required=True, help="Path to .mcp.json")
-    parser.add_argument("--tools-info", "-t", help="Path to tools.info (legacy mode, optional)")
+    parser.add_argument("--servers", "-s", action="append", dest="servers",
+                        help="Server name(s) to generate (can specify multiple, default: all)")
+    parser.add_argument("--tools-info", "-t", help="Path to tools.info (legacy mode, single server only)")
     parser.add_argument("--output", "-o", default=default_output,
                         help=f"Output directory (default: {default_output})")
-    parser.add_argument("--name", "-n", help="Skill name (auto-detected if not specified)")
+    parser.add_argument("--name", "-n", help="Skill name (auto-detected if not specified, only for single server)")
     parser.add_argument("--catalog-url", default=CATALOG_URL,
                         help=f"URL to mcp_tool_catalog.yaml (default: {CATALOG_URL})")
     parser.add_argument("--lazy", "-l", action="store_true",
-                        help="Generate minimal SKILL.md (tool definitions in references/tools.json)")
+                        help="Generate minimal SKILL.md (tool definitions in references/tools/*.yaml)")
 
     args = parser.parse_args()
-    generate_skill(
-        mcp_config_path=args.mcp_config,
-        output_dir=args.output,
-        skill_name=args.name,
-        tools_info_path=args.tools_info,
-        catalog_url=args.catalog_url,
-        lazy=args.lazy,
-    )
+
+    # Legacy mode: tools.info specified (single server only)
+    if args.tools_info:
+        if args.servers and len(args.servers) > 1:
+            print("Error: --tools-info only supports single server mode", file=sys.stderr)
+            sys.exit(1)
+        generate_skill(
+            mcp_config_path=args.mcp_config,
+            output_dir=args.output,
+            skill_name=args.name,
+            tools_info_path=args.tools_info,
+            catalog_url=args.catalog_url,
+            lazy=args.lazy,
+        )
+    else:
+        # Multi-server mode
+        generate_skills_for_servers(
+            mcp_config_path=args.mcp_config,
+            output_dir=args.output,
+            server_names=args.servers,
+            catalog_url=args.catalog_url,
+            lazy=args.lazy,
+        )
 
 
 if __name__ == "__main__":
