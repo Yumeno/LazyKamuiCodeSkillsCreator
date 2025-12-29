@@ -172,44 +172,44 @@ def parse_status_response(result: dict) -> tuple[str, dict]:
     return "unknown", result
 
 
+def extract_download_urls(result: dict) -> list[str]:
+    """
+    Recursively extract all download URLs from result response.
+
+    Traverses the entire response structure to find all URL strings,
+    regardless of key names. Handles nested dicts, lists, and JSON strings.
+    """
+    urls = []
+    seen = set()  # Avoid duplicates
+
+    def _extract(obj):
+        if isinstance(obj, str):
+            # Check if it's a URL
+            if obj.startswith(("http://", "https://")) and obj not in seen:
+                seen.add(obj)
+                urls.append(obj)
+            # Check if it's a JSON string that might contain URLs
+            elif obj.startswith("{") or obj.startswith("["):
+                try:
+                    parsed = json.loads(obj)
+                    _extract(parsed)
+                except json.JSONDecodeError:
+                    pass
+        elif isinstance(obj, list):
+            for item in obj:
+                _extract(item)
+        elif isinstance(obj, dict):
+            for value in obj.values():
+                _extract(value)
+
+    _extract(result)
+    return urls
+
+
 def extract_download_url(result: dict) -> str | None:
-    """Extract download URL from result response."""
-    if isinstance(result, dict):
-        # Direct URL fields
-        for key in ["url", "download_url", "downloadUrl", "output_url", "outputUrl", "result_url"]:
-            if key in result:
-                return result[key]
-
-        # Check images array (fal.ai style)
-        images = result.get("images", [])
-        if images and isinstance(images, list) and len(images) > 0:
-            first_image = images[0]
-            if isinstance(first_image, dict) and "url" in first_image:
-                return first_image["url"]
-
-        # Check nested content
-        content = result.get("content", [])
-        if content and isinstance(content, list):
-            for item in content:
-                if isinstance(item, dict):
-                    text = item.get("text", "")
-                    try:
-                        parsed = json.loads(text)
-                        # Direct URL fields in parsed content
-                        for key in ["url", "download_url", "downloadUrl", "output_url", "outputUrl", "result_url"]:
-                            if key in parsed:
-                                return parsed[key]
-                        # Check images array in parsed content (fal.ai style)
-                        images = parsed.get("images", [])
-                        if images and isinstance(images, list) and len(images) > 0:
-                            first_image = images[0]
-                            if isinstance(first_image, dict) and "url" in first_image:
-                                return first_image["url"]
-                    except json.JSONDecodeError:
-                        # Maybe the text itself is a URL
-                        if text.startswith("http"):
-                            return text
-    return None
+    """Extract first download URL from result response (backward compat)."""
+    urls = extract_download_urls(result)
+    return urls[0] if urls else None
 
 
 def get_extension_from_content_type(content_type: str) -> str:
@@ -476,7 +476,14 @@ def run_async_mcp_job(
         save_logs_to_dir: Save logs to {output_dir}/logs/
         save_logs_inline: Save logs alongside downloaded file
 
-    Returns dict with request_id, status, download_url, saved_path, log_paths.
+    Returns dict with:
+        - request_id: Job ID
+        - status: Final job status
+        - download_urls: List of all download URLs found
+        - saved_paths: List of all saved file paths
+        - download_url: First download URL (backward compat)
+        - saved_path: First saved file path (backward compat)
+        - log_paths: List of log file paths (if logging enabled)
     """
     completed_statuses = completed_statuses or ["completed", "done", "success", "finished", "ready"]
     failed_statuses = failed_statuses or ["failed", "error", "cancelled", "timeout"]
@@ -540,13 +547,14 @@ def run_async_mcp_job(
         "tool": result_tool,
         "response": result_resp,
     }
-    download_url = extract_download_url(result_resp)
+    # Extract all download URLs
+    download_urls = extract_download_urls(result_resp)
 
-    if not download_url:
-        # Maybe result is already in status response
-        download_url = extract_download_url(status_result)
+    if not download_urls:
+        # Maybe URLs are in status response
+        download_urls = extract_download_urls(status_result)
 
-    if not download_url:
+    if not download_urls:
         # Save logs even if no download URL
         log_paths = []
         if save_logs_to_dir or save_logs_inline:
@@ -565,17 +573,27 @@ def run_async_mcp_job(
             "log_paths": log_paths,
         }
 
-    # Step 4: Download
-    print(f"[DOWNLOAD] {download_url}")
-    saved_path = download_file(
-        url=download_url,
-        output_dir=output_dir,
-        output_file=output_file,
-        headers=None,  # Don't use MCP headers for download
-        request_id=request_id,
-        auto_filename_mode=auto_filename,
-    )
-    print(f"[DOWNLOAD] Saved to: {saved_path}")
+    # Step 4: Download all files
+    saved_paths = []
+    for i, url in enumerate(download_urls):
+        print(f"[DOWNLOAD] ({i + 1}/{len(download_urls)}) {url}")
+
+        # For multiple files, add index suffix to output_file if specified
+        current_output_file = output_file
+        if output_file and len(download_urls) > 1:
+            base, ext = os.path.splitext(output_file)
+            current_output_file = f"{base}_{i + 1}{ext}"
+
+        saved_path = download_file(
+            url=url,
+            output_dir=output_dir,
+            output_file=current_output_file,
+            headers=None,  # Don't use MCP headers for download
+            request_id=request_id,
+            auto_filename_mode=auto_filename,
+        )
+        saved_paths.append(saved_path)
+        print(f"[DOWNLOAD] Saved to: {saved_path}")
 
     # Step 5: Save logs if requested
     log_paths = []
@@ -583,7 +601,7 @@ def run_async_mcp_job(
         log_paths = save_logs(
             logs=logs,
             output_dir=output_dir,
-            saved_filepath=saved_path,
+            saved_filepath=saved_paths[0] if saved_paths else None,
             save_to_logs_dir=save_logs_to_dir,
             save_inline=save_logs_inline,
         )
@@ -593,8 +611,11 @@ def run_async_mcp_job(
     return {
         "request_id": request_id,
         "status": status,
-        "download_url": download_url,
-        "saved_path": saved_path,
+        "download_urls": download_urls,
+        "saved_paths": saved_paths,
+        # Backward compatibility (first file)
+        "download_url": download_urls[0] if download_urls else None,
+        "saved_path": saved_paths[0] if saved_paths else None,
         "log_paths": log_paths,
     }
 
