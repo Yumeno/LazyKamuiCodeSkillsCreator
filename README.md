@@ -14,6 +14,11 @@ Claude Code用のMCPスキルジェネレーター。非同期ジョブパター
 | **Lazyモード** | SKILL.mdを軽量化し、ツール定義を外部YAMLファイルに分離。初期コンテキスト消費を大幅削減 | `--lazy` |
 | **複数サーバー対応** | 1つのmcp.jsonから複数サーバーのスキルを一括生成。個別指定も可能 | `--servers` |
 | **YAML形式出力** | ツール定義をLLMフレンドリーなYAML形式で出力。`_usage`セクションに実行例を含む | Lazyモード時自動 |
+| **出力ファイル指定** | ディレクトリとファイルパスを別々に指定可能。ファイル名のみ指定で組み合わせ | `--output-file` |
+| **自動ファイル命名** | `{request_id}_{timestamp}.{ext}` 形式でユニークなファイル名を自動生成 | `--auto-filename` |
+| **拡張子自動検出** | Content-Type、URL、ユーザー指定の優先順位で拡張子を決定 | 自動 |
+| **重複ファイル回避** | 同名ファイル存在時にサフィックス自動付与（`_1`, `_2`...） | 自動 |
+| **ログ保存** | リクエスト/レスポンスJSONを保存（logsフォルダまたはインライン） | `--save-logs`, `--save-logs-inline` |
 
 ### 機能比較
 
@@ -253,10 +258,24 @@ python scripts/mcp_async_call.py \
 | `--args, -a` | JSON文字列として送信引数 |
 | `--args-file` | JSONファイルから引数を読み込み |
 | `--output, -o` | 出力ディレクトリ（デフォルト: ./output） |
+| `--output-file, -O` | 出力ファイルパス（上書き許可、ファイル名のみなら--outputと組み合わせ） |
+| `--auto-filename` | `{request_id}_{timestamp}.{ext}` 形式で自動命名 |
 | `--poll-interval` | ポーリング間隔秒数（デフォルト: 2.0） |
 | `--max-polls` | 最大ポーリング回数（デフォルト: 300） |
 | `--header` | カスタムヘッダー追加（形式: `Key:Value`） |
 | `--config, -c` | .mcp.jsonからエンドポイントを読み込み |
+| `--save-logs` | `{output}/logs/` にリクエスト/レスポンスログを保存 |
+| `--save-logs-inline` | 出力ファイルと同じ場所に `{filename}_*.json` 形式でログ保存 |
+
+**拡張子の決定順序:**
+1. `--output-file` で指定されている場合はその拡張子
+2. ダウンロード時の `Content-Type` ヘッダーから推測
+3. URLのパスから抽出
+4. 検出できない場合は警告を表示
+
+**重複ファイル回避:**
+`--output-file` 未指定の場合、同名ファイルが存在するとサフィックスを付与:
+- `output.png` → `output_1.png` → `output_2.png`
 
 ### `scripts/generate_skill.py`
 
