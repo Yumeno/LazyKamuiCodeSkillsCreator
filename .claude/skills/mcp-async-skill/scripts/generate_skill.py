@@ -271,8 +271,15 @@ def get_required_params_example(tools: list[dict]) -> str:
     return '{"prompt": "your input here"}'
 
 
-def generate_skill_md(mcp_config: dict, tools: list[dict], skill_name: str) -> str:
-    """Generate SKILL.md content."""
+def generate_skill_md(mcp_config: dict, tools: list[dict], skill_name: str, lazy: bool = False) -> str:
+    """Generate SKILL.md content.
+
+    Args:
+        mcp_config: MCP configuration dict
+        tools: List of tool definitions
+        skill_name: Name of the skill
+        lazy: If True, generate minimal SKILL.md with tool references only
+    """
     endpoint = mcp_config.get("url") or mcp_config.get("endpoint", "")
     server_name = mcp_config.get("name", skill_name)
     auth_header = mcp_config.get("auth_header", "")
@@ -281,23 +288,54 @@ def generate_skill_md(mcp_config: dict, tools: list[dict], skill_name: str) -> s
     pattern = identify_async_pattern(tools)
 
     # Build tool documentation
-    tool_docs = []
-    for tool in tools:
-        name = tool.get("name", "")
-        desc = tool.get("description", "")
-        schema = tool.get("inputSchema", tool.get("parameters", {}))
-        properties = schema.get("properties", {})
+    if lazy:
+        # Lazy mode: minimal tool list (name + description only)
+        tool_list = []
+        for tool in tools:
+            name = tool.get("name", "")
+            desc = tool.get("description", "")
+            tool_list.append(f"- **{name}**: {desc}")
 
-        params_doc = []
-        for pname, pspec in properties.items():
-            ptype = pspec.get("type", "any")
-            pdesc = pspec.get("description", "")
-            required = pname in schema.get("required", [])
-            req_mark = "*" if required else ""
-            params_doc.append(f"  - `{pname}`{req_mark} ({ptype}): {pdesc}")
+        tool_docs_section = f"""## Available Tools
 
-        tool_doc = f"### {name}\n{desc}\n\n**Parameters:**\n" + "\n".join(params_doc) if params_doc else f"### {name}\n{desc}"
-        tool_docs.append(tool_doc)
+> **Note:** Detailed tool definitions are NOT included in this document to save context window.
+> Before executing any tool, you MUST read the full specification from `references/tools.json`.
+
+**Quick reference** (name and description only):
+
+{chr(10).join(tool_list)}
+
+### How to Use Tools
+
+1. **Read tool specification**: Use Read tool on `references/tools.json`
+2. **Find specific tool**: Search for tool name in the JSON
+3. **Check required parameters** (marked in `required` array) and schema
+4. **Execute** using `scripts/mcp_async_call.py` with appropriate arguments
+"""
+    else:
+        # Full mode: existing behavior with detailed parameters
+        tool_docs = []
+        for tool in tools:
+            name = tool.get("name", "")
+            desc = tool.get("description", "")
+            schema = tool.get("inputSchema", tool.get("parameters", {}))
+            properties = schema.get("properties", {})
+
+            params_doc = []
+            for pname, pspec in properties.items():
+                ptype = pspec.get("type", "any")
+                pdesc = pspec.get("description", "")
+                required = pname in schema.get("required", [])
+                req_mark = "*" if required else ""
+                params_doc.append(f"  - `{pname}`{req_mark} ({ptype}): {pdesc}")
+
+            tool_doc = f"### {name}\n{desc}\n\n**Parameters:**\n" + "\n".join(params_doc) if params_doc else f"### {name}\n{desc}"
+            tool_docs.append(tool_doc)
+
+        tool_docs_section = f"""## Available Tools
+
+{chr(10).join(tool_docs)}
+"""
 
     # Authentication section
     all_headers = mcp_config.get("all_headers", {})
@@ -447,10 +485,7 @@ python scripts/mcp_async_call.py \\
   --output ./output
 ```
 {async_section}{upload_section}
-## Available Tools
-
-{chr(10).join(tool_docs)}
-
+{tool_docs_section}
 ## Usage Examples
 
 ### Direct JSON-RPC Call
@@ -662,6 +697,7 @@ def generate_skill(
     skill_name: str | None = None,
     tools_info_path: str | None = None,
     catalog_url: str = CATALOG_URL,
+    lazy: bool = False,
 ):
     """Generate complete skill from MCP config and catalog.
 
@@ -671,6 +707,7 @@ def generate_skill(
         skill_name: Skill name (auto-detected if not specified)
         tools_info_path: Optional path to tools.info (legacy mode)
         catalog_url: URL to mcp_tool_catalog.yaml
+        lazy: If True, generate minimal SKILL.md (tool definitions in references/tools.json)
     """
     mcp_config = load_mcp_config(mcp_config_path)
 
@@ -703,7 +740,7 @@ def generate_skill(
     os.makedirs(references_dir, exist_ok=True)
 
     # Generate SKILL.md
-    skill_md = generate_skill_md(mcp_config, tools, skill_name)
+    skill_md = generate_skill_md(mcp_config, tools, skill_name, lazy=lazy)
     (skill_dir / "SKILL.md").write_text(skill_md, encoding='utf-8')
 
     # Copy mcp_async_call.py
@@ -761,6 +798,10 @@ Examples:
   # Output: .claude/skills/<skill-name>/SKILL.md
   python generate_skill.py -m mcp.json
 
+  # Generate minimal SKILL.md (lazy loading mode)
+  # Tool definitions are read from references/tools.json at runtime
+  python generate_skill.py -m mcp.json --lazy
+
   # Generate skill with legacy tools.info
   python generate_skill.py -m mcp.json -t tools.info
 
@@ -778,6 +819,8 @@ Examples:
     parser.add_argument("--name", "-n", help="Skill name (auto-detected if not specified)")
     parser.add_argument("--catalog-url", default=CATALOG_URL,
                         help=f"URL to mcp_tool_catalog.yaml (default: {CATALOG_URL})")
+    parser.add_argument("--lazy", "-l", action="store_true",
+                        help="Generate minimal SKILL.md (tool definitions in references/tools.json)")
 
     args = parser.parse_args()
     generate_skill(
@@ -786,6 +829,7 @@ Examples:
         skill_name=args.name,
         tools_info_path=args.tools_info,
         catalog_url=args.catalog_url,
+        lazy=args.lazy,
     )
 
 
