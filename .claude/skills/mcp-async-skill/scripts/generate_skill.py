@@ -240,16 +240,56 @@ def detect_media_type(tools: list[dict]) -> str | None:
     return None
 
 
-def convert_tools_to_yaml_dict(tools: list[dict]) -> dict:
-    """Convert tools list to a compact YAML-friendly dict structure.
+def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill_name: str = None) -> dict:
+    """Convert tools list to a compact YAML-friendly dict structure with usage examples.
 
     Args:
         tools: List of tool definitions
+        mcp_config: MCP configuration dict (optional, for generating usage examples)
+        skill_name: Skill name (optional, for generating usage examples)
 
     Returns:
-        Dict with tool names as keys and compact tool info as values
+        Dict with _usage section and tool names as keys
     """
     result = {}
+
+    # Add usage section if mcp_config is provided
+    if mcp_config:
+        endpoint = mcp_config.get("url") or mcp_config.get("endpoint", "")
+        pattern = identify_async_pattern(tools)
+        example_args = get_required_params_example(tools)
+
+        # Build header args for bash
+        all_headers = mcp_config.get("all_headers", {})
+        auth_header = mcp_config.get("auth_header", "")
+        auth_value = mcp_config.get("auth_value", "")
+
+        header_lines = []
+        if all_headers:
+            for k, v in all_headers.items():
+                header_lines.append(f'  --header "{k}:{v}"')
+        elif auth_header and auth_value:
+            header_lines.append(f'  --header "{auth_header}:{auth_value}"')
+
+        header_arg = " \\\n".join(header_lines) if header_lines else ""
+        if header_arg:
+            header_arg = " \\\n" + header_arg
+
+        bash_example = f"""python scripts/mcp_async_call.py \\
+  --endpoint "{endpoint}" \\
+  --submit-tool "{pattern['submit'][0] if pattern['submit'] else 'SUBMIT_TOOL'}" \\
+  --status-tool "{pattern['status'][0] if pattern['status'] else 'STATUS_TOOL'}" \\
+  --result-tool "{pattern['result'][0] if pattern['result'] else 'RESULT_TOOL'}" \\
+  --args '{example_args}'{header_arg} \\
+  --output ./output"""
+
+        result["_usage"] = {
+            "description": "How to execute this MCP server's tools",
+            "bash": bash_example,
+            "wrapper": f"python scripts/{skill_name.replace('-', '_')}.py --args '{example_args}'" if skill_name else None,
+        }
+
+    # Add tool definitions
     for tool in tools:
         name = tool.get("name", "")
         schema = tool.get("inputSchema", tool.get("parameters", {}))
@@ -796,7 +836,7 @@ def generate_skill(
         os.makedirs(tools_dir, exist_ok=True)
 
         # Convert to compact YAML structure
-        yaml_data = convert_tools_to_yaml_dict(tools)
+        yaml_data = convert_tools_to_yaml_dict(tools, mcp_config, skill_name)
         yaml_filename = f"{skill_name}.yaml"
 
         if yaml is None:
