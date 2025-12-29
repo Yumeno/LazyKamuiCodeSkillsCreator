@@ -31,9 +31,19 @@ pip install pyyaml requests
 ### 3. スキルを生成
 
 ```bash
-# カタログから自動取得（推奨）
+# mcp.json内の全サーバーのスキルを生成
 python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
   -m /path/to/your/.mcp.json
+
+# 特定のサーバーのみ生成
+python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
+  -m /path/to/your/.mcp.json \
+  -s fal-ai/flux-lora
+
+# 複数サーバーを指定
+python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
+  -m /path/to/your/.mcp.json \
+  -s fal-ai/flux-lora -s fal-ai/video-enhance
 
 # Lazyモードで生成（コンテキスト節約）
 python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
@@ -146,6 +156,7 @@ python scripts/mcp_async_call.py \
 
 ### .mcp.json
 
+**単一サーバー形式:**
 ```json
 {
   "name": "my-mcp-server",
@@ -153,6 +164,31 @@ python scripts/mcp_async_call.py \
   "type": "url"
 }
 ```
+
+**複数サーバー形式（推奨）:**
+```json
+{
+  "mcpServers": {
+    "fal-ai/flux-lora": {
+      "url": "https://mcp.example.com/flux-lora/sse",
+      "headers": {
+        "Authorization": "Bearer xxx"
+      }
+    },
+    "fal-ai/video-enhance": {
+      "url": "https://mcp.example.com/video-enhance/sse",
+      "headers": {
+        "Authorization": "Bearer xxx"
+      }
+    }
+  }
+}
+```
+
+複数サーバー形式の場合：
+- `python generate_skill.py -m mcp.json` → 全サーバーのスキルを生成
+- `python generate_skill.py -m mcp.json -s fal-ai/flux-lora` → 指定サーバーのみ生成
+- `python generate_skill.py -m mcp.json -s server1 -s server2` → 複数指定可能
 
 ### tools.info
 
@@ -201,11 +237,12 @@ MCP仕様から完全なスキルを生成。
 | オプション | 説明 |
 |-----------|------|
 | `--mcp-config, -m` | .mcp.jsonへのパス（必須） |
-| `--tools-info, -t` | tools.infoへのパス（レガシーモード、省略時はカタログから取得） |
+| `--servers, -s` | 生成するサーバー名（複数指定可、省略時は全サーバー） |
+| `--tools-info, -t` | tools.infoへのパス（レガシーモード、単一サーバーのみ） |
 | `--output, -o` | 出力ディレクトリ（デフォルト: .claude/skills） |
-| `--name, -n` | スキル名（省略時は自動検出） |
+| `--name, -n` | スキル名（省略時は自動検出、単一サーバーのみ） |
 | `--catalog-url` | カタログYAMLのURL（デフォルト: GitHub） |
-| `--lazy, -l` | 最小限のSKILL.mdを生成（ツール定義は references/tools.json に委譲） |
+| `--lazy, -l` | 最小限のSKILL.mdを生成（ツール定義は references/tools/*.yaml に委譲） |
 
 ## 生成されるスキル構造
 
