@@ -43,15 +43,29 @@ python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
 
 ### 4. 生成されたスキルの場所
 
+**通常モード:**
 ```
 .claude/skills/<skill-name>/
-├── SKILL.md              # 使用方法ドキュメント
+├── SKILL.md              # 使用方法ドキュメント（全ツール詳細含む）
 ├── scripts/
 │   ├── mcp_async_call.py # コア非同期コーラー
 │   └── <skill_name>.py   # 便利ラッパー
 └── references/
     ├── mcp.json          # 元のMCPコンフィグ
     └── tools.json        # 元のツール仕様
+```
+
+**Lazyモード (`--lazy`):**
+```
+.claude/skills/<skill-name>/
+├── SKILL.md              # 使用方法ドキュメント（軽量版）
+├── scripts/
+│   ├── mcp_async_call.py # コア非同期コーラー
+│   └── <skill_name>.py   # 便利ラッパー
+└── references/
+    ├── mcp.json          # 元のMCPコンフィグ
+    └── tools/
+        └── <skill-name>.yaml  # ツール定義+使用例（YAML形式）
 ```
 
 ## クイックスタート
@@ -251,38 +265,67 @@ print(result["saved_path"])  # ダウンロードしたファイルへのパス
 | 項目 | 通常モード | Lazyモード |
 |-----|-----------|-----------|
 | SKILL.mdのサイズ | 大（パラメータ詳細含む） | 小（名前+説明のみ） |
+| ツール定義の形式 | JSON（tools.json） | YAML（tools/{skill}.yaml） |
 | 初期トークン消費 | 高 | 極小 |
-| ツール実行までのステップ | 即実行可能 | +1ターン（JSON読み込み） |
+| ツール実行までのステップ | 即実行可能 | +1ターン（YAML読み込み） |
 | 推奨用途 | ツール数が少ない場合 | ツール数が多い場合 |
 
 ### Lazyモードの使用フロー
 
 1. ユーザーがAIに指示（例：「画像を生成して」）
 2. AIがSKILL.mdを確認し、該当ツールを特定
-3. AIが `references/tools.json` を読み込んでパラメータを確認
+3. AIが `references/tools/{skill}.yaml` を読み込んでパラメータと実行方法を確認
 4. AIがツールを実行
 
-### 生成されるSKILL.mdの例（Lazyモード）
+### 生成されるYAMLの例（Lazyモード）
 
-```markdown
-## Available Tools
+```yaml
+# references/tools/t2i-kamui-fal-flux-lora.yaml
+_usage:
+  description: How to execute this MCP server's tools
+  bash: |
+    python scripts/mcp_async_call.py \
+      --endpoint "https://kamui-code.ai/t2i/fal/flux-lora" \
+      --submit-tool "flux_lora_submit" \
+      --status-tool "flux_lora_status" \
+      --result-tool "flux_lora_result" \
+      --args '{"prompt": "your input here"}' \
+      --header "KAMUI-CODE-PASS:your-pass" \
+      --output ./output
+  wrapper: python scripts/t2i_kamui_fal_flux_lora.py --args '{"prompt": "..."}'
 
-> **Note:** Detailed tool definitions are NOT included in this document to save context window.
-> Before executing any tool, you MUST read the full specification from `references/tools.json`.
+flux_lora_submit:
+  description: Submit Flux LoRA image generation request
+  required:
+    - prompt
+  parameters:
+    prompt:
+      type: string
+      description: Image prompt
+    lora_path:
+      type: string
+      description: LoRA model path
 
-**Quick reference** (name and description only):
+flux_lora_status:
+  description: Check job status
+  required:
+    - request_id
+  parameters:
+    request_id:
+      type: string
+      description: Request ID from submit
 
-- **flux_lora_submit**: Submit Flux LoRA image generation request
-- **flux_lora_status**: Check job status
-- **flux_lora_result**: Get generation result
-
-### How to Use Tools
-
-1. **Read tool specification**: Use Read tool on `references/tools.json`
-2. **Find specific tool**: Search for tool name in the JSON
-3. **Check required parameters** (marked in `required` array) and schema
-4. **Execute** using `scripts/mcp_async_call.py` with appropriate arguments
+flux_lora_result:
+  description: Get generation result
+  required:
+    - request_id
+  parameters:
+    request_id:
+      type: string
+      description: Request ID
 ```
+
+AIはこのYAMLファイル1つを読むだけで、実行に必要な情報をすべて取得できます。
 
 ## ライセンス
 
