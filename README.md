@@ -135,7 +135,7 @@ python scripts/generate_skill.py \
 
 **Lazyモードの動作:**
 - SKILL.md にはツール名と説明のみを記載（パラメータ詳細は省略）
-- AIは実行前に `references/tools.json` を読み込んで詳細を確認
+- AIは実行前に `references/tools/{skill}.yaml` を読み込んで詳細を確認
 - 初期ロード時のトークン消費を大幅に削減
 
 ### レガシーモード（tools.info使用）
@@ -325,7 +325,7 @@ result = run_async_mcp_job(
     submit_args={"prompt": "山に沈む夕日"},
     status_tool="status",
     result_tool="result",
-    output_path="./output",
+    output_dir="./output",
     poll_interval=2.0,
     max_polls=300,
 )

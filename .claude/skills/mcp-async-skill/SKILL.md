@@ -319,7 +319,7 @@ result = run_async_mcp_job(
     submit_args={"prompt": "sunset over mountains"},
     status_tool="status",
     result_tool="result",
-    output_path="./output",
+    output_dir="./output",
     poll_interval=2.0,
     max_polls=300,
 )
