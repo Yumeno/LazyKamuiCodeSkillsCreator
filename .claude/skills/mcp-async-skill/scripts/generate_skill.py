@@ -331,13 +331,17 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
         properties = schema.get("properties", {})
         required = schema.get("required", [])
 
-        # Build compact parameter structure
+        # Build compact parameter structure (passthrough all schema fields)
         params = {}
         for pname, pspec in properties.items():
             params[pname] = {
                 "type": pspec.get("type", "any"),
                 "description": pspec.get("description", ""),
             }
+            # Passthrough additional schema fields (enum, default, minimum, maximum, items, etc.)
+            for key, value in pspec.items():
+                if key not in ("type", "description"):
+                    params[pname][key] = value
 
         result[name] = {
             "description": tool.get("description", ""),
@@ -435,7 +439,22 @@ def generate_skill_md(mcp_config: dict, tools: list[dict], skill_name: str, lazy
                 pdesc = pspec.get("description", "")
                 required = pname in schema.get("required", [])
                 req_mark = "*" if required else ""
-                params_doc.append(f"  - `{pname}`{req_mark} ({ptype}): {pdesc}")
+
+                # Build additional schema info
+                extras = []
+                if "default" in pspec:
+                    extras.append(f"default: {pspec['default']}")
+                if "enum" in pspec:
+                    extras.append(f"options: {pspec['enum']}")
+                if "minimum" in pspec:
+                    extras.append(f"min: {pspec['minimum']}")
+                if "maximum" in pspec:
+                    extras.append(f"max: {pspec['maximum']}")
+                if "items" in pspec and isinstance(pspec["items"], dict) and "enum" in pspec["items"]:
+                    extras.append(f"options: {pspec['items']['enum']}")
+
+                extra_str = f" [{', '.join(extras)}]" if extras else ""
+                params_doc.append(f"  - `{pname}`{req_mark} ({ptype}): {pdesc}{extra_str}")
 
             tool_doc = f"### {name}\n{desc}\n\n**Parameters:**\n" + "\n".join(params_doc) if params_doc else f"### {name}\n{desc}"
             tool_docs.append(tool_doc)
