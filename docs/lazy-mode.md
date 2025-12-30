@@ -81,11 +81,29 @@ Submit Flux LoRA image generation request
 ```
 
 **Lazyモード（軽量）:**
+
+SKILL.mdには最小限の情報のみ記載し、CLI Options、Usage Examples、Quick Startなどの詳細は全てYAMLに集約します。
+
 ```markdown
+---
+name: flux-lora
+description: MCP skill for flux-lora...
+---
+
+# flux-lora
+
+MCP integration for **flux-lora**.
+
+## Endpoint
+
+\`\`\`
+https://example.com/sse
+\`\`\`
+
 ## Available Tools
 
 > **Note:** Detailed tool definitions are NOT included in this document to save context window.
-> Before executing any tool, you MUST read the full specification from `references/tools/<skill>.yaml`.
+> Before executing any tool, you MUST read the full specification from `references/tools/flux-lora.yaml`.
 
 **Quick reference** (name and description only):
 
@@ -98,15 +116,38 @@ Submit Flux LoRA image generation request
 1. **Read tool specification**: Use Read tool on `references/tools/<skill>.yaml`
 2. **Find the tool** you need and check its `required` parameters
 3. **Execute** using `scripts/mcp_async_call.py` with appropriate arguments
+
+## How to Execute
+
+> Before executing any tool, **read the full specification** from `references/tools/flux-lora.yaml`.
+> The YAML file contains `_usage` section with execution examples and CLI options.
+
+\`\`\`bash
+# Read tool specification first
+cat references/tools/flux-lora.yaml
+
+# Then execute (example from _usage.bash in YAML)
+python .claude/skills/flux-lora/scripts/mcp_async_call.py --help
+\`\`\`
+
+## References
+
+- Tool Specs & Usage: `references/tools/flux-lora.yaml`
+- MCP Config: `references/mcp.json`
 ```
+
+**ポイント:**
+- CLI Options テーブルは含まれない（YAMLの `_usage.options` を参照）
+- Usage Examples (Python) は含まれない（YAMLの `_usage.bash` を参照）
+- Quick Start は最小限のヘルプコマンドのみ
 
 ### YAML出力形式
 
 ```yaml
 _usage:
-  description: How to execute this MCP server's tools
+  description: How to execute this MCP server's tools (run from project root)
   bash: |
-    python scripts/mcp_async_call.py \
+    python .claude/skills/flux-lora/scripts/mcp_async_call.py \
       --endpoint "https://example.com/sse" \
       --submit-tool "flux_lora_submit" \
       --status-tool "flux_lora_status" \
@@ -114,7 +155,29 @@ _usage:
       --args '{"prompt": "your input here"}' \
       --header "Authorization:Bearer xxx" \
       --output ./output
-  wrapper: python scripts/flux_lora.py --args '{"prompt": "..."}'
+  wrapper: python .claude/skills/flux-lora/scripts/flux_lora.py --args '{"prompt": "..."}'
+  options:
+    --endpoint, -e: MCPサーバーのエンドポイントURL
+    --config, -c: .mcp.jsonからエンドポイントを読み込み
+    --submit-tool: ジョブ送信用ツール名 (必須)
+    --status-tool: ステータス確認用ツール名 (必須)
+    --result-tool: 結果取得用ツール名 (必須)
+    --args, -a: 送信引数 (JSON文字列)
+    --args-file: 送信引数をJSONファイルから読み込み
+    --output, -o: 出力ディレクトリ (デフォルト: ./output)
+    --output-file, -O: 出力ファイルパス (上書き許可)
+    --auto-filename: '{request_id}_{timestamp}.{ext} 形式で命名'
+    --poll-interval: ポーリング間隔秒数 (デフォルト: 2.0)
+    --max-polls: 最大ポーリング回数 (デフォルト: 300)
+    --header: カスタムヘッダー追加 (Key:Value形式、複数可)
+    --id-param: ジョブIDパラメータ名 (デフォルト: request_id)
+    --save-logs: '{output}/logs/ にログ保存'
+    --save-logs-inline: 出力ファイル横にログ保存
+  notes:
+    execution: 必ずプロジェクトルートから実行すること
+    output_path: --output の相対パスはカレントディレクトリ基準
+    multi_file: 複数URLがある場合は全て自動ダウンロード (連番サフィックス付与)
+    extension: 拡張子は --output-file > Content-Type > URL の優先順位で決定
 
 flux_lora_submit:
   description: Submit Flux LoRA image generation request
@@ -195,12 +258,23 @@ if lazy:
 def convert_tools_to_yaml_dict(tools, mcp_config=None, skill_name=None):
     result = {}
 
-    # Add _usage section with execution examples
+    # Add _usage section with execution examples and CLI reference
     if mcp_config:
         result["_usage"] = {
-            "description": "How to execute this MCP server's tools",
+            "description": "How to execute this MCP server's tools (run from project root)",
             "bash": bash_example,
             "wrapper": wrapper_example,
+            "options": {
+                "--endpoint, -e": "MCPサーバーのエンドポイントURL",
+                "--config, -c": ".mcp.jsonからエンドポイントを読み込み",
+                # ... all CLI options
+            },
+            "notes": {
+                "execution": "必ずプロジェクトルートから実行すること",
+                "output_path": "--output の相対パスはカレントディレクトリ基準",
+                "multi_file": "複数URLがある場合は全て自動ダウンロード (連番サフィックス付与)",
+                "extension": "拡張子は --output-file > Content-Type > URL の優先順位で決定",
+            },
         }
 
     # Add tool definitions with full schema
@@ -225,6 +299,13 @@ def convert_tools_to_yaml_dict(tools, mcp_config=None, skill_name=None):
     return result
 ```
 
+**`_usage`セクションの構造:**
+- `description`: YAMLファイルの用途説明
+- `bash`: 完全なコマンド例（プロジェクトルートからの絶対パス）
+- `wrapper`: 簡易ラッパースクリプト呼び出し例
+- `options`: CLI全オプションの説明（キー=オプション名、値=説明）
+- `notes`: 実行時の注意事項
+
 ### LLMの利用フロー
 
 1. **スキル読み込み**: LLMがSKILL.mdを読む（軽量なのでコンテキスト消費小）
@@ -236,9 +317,10 @@ def convert_tools_to_yaml_dict(tools, mcp_config=None, skill_name=None):
 
 | MCPサーバー | ツール数 | 通常モード | Lazyモード | 削減率 |
 |------------|---------|-----------|-----------|-------|
-| fal-ai/flux-lora | 3 | ~2,000 tokens | ~500 tokens | 75% |
-| 大規模MCP | 20+ | ~15,000 tokens | ~1,000 tokens | 93% |
+| fal-ai/flux-lora | 3 | ~2,500 tokens | ~300 tokens | 88% |
+| 大規模MCP | 20+ | ~15,000 tokens | ~500 tokens | 97% |
 
+※ Lazyモードでは CLI Options テーブル、Usage Examples (Python) も含まれないため、さらに軽量。
 ※ 実行時にYAMLを読むため、総トークン消費は同等。ただし初期コンテキスト占有を削減。
 
 ## 使用例
