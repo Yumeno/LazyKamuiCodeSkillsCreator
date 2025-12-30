@@ -607,7 +607,47 @@ The returned URL can be used in the `{cfg['param']}` parameter.
     # Get example args based on required parameters
     example_args = get_required_params_example(tools)
 
-    skill_md = f"""---
+    # Generate different content based on lazy mode
+    if lazy:
+        # Lazy mode: minimal SKILL.md - defer details to YAML
+        yaml_ref = f"references/tools/{skill_name}.yaml"
+        skill_md = f"""---
+name: {skill_name}
+description: MCP skill for {server_name}. Provides async job execution with submit/status/result pattern via JSON-RPC 2.0. Use when calling {server_name} tools that require async processing.
+---
+
+# {skill_name}
+
+MCP integration for **{server_name}**.
+
+## Endpoint
+
+```
+{endpoint}
+```
+{auth_section}{async_section}{upload_section}
+{tool_docs_section}
+## How to Execute
+
+> Before executing any tool, **read the full specification** from `{yaml_ref}`.
+> The YAML file contains `_usage` section with execution examples and CLI options.
+
+```bash
+# Read tool specification first
+cat {yaml_ref}
+
+# Then execute (example from _usage.bash in YAML)
+python .claude/skills/{skill_name}/scripts/mcp_async_call.py --help
+```
+
+## References
+
+- Tool Specs & Usage: `{yaml_ref}`
+- MCP Config: `references/mcp.json`
+"""
+    else:
+        # Full mode: detailed SKILL.md with all information
+        skill_md = f"""---
 name: {skill_name}
 description: MCP skill for {server_name}. Provides async job execution with submit/status/result pattern via JSON-RPC 2.0. Use when calling {server_name} tools that require async processing.
 ---
@@ -767,7 +807,7 @@ result_payload = {{
     "params": {{
         "name": "{pattern['result'][0] if pattern['result'] else 'result_tool'}",
         "arguments": {{"request_id": request_id}}
-    }}
+        }}
 }}
 resp = requests.post(ENDPOINT, headers=headers, json=result_payload)
 result = resp.json()["result"]
@@ -777,7 +817,7 @@ print(f"Download URL: {{result['url']}}")
 ## References
 
 - MCP Config: `references/mcp.json`
-- Tool Specs: `{"references/tools/" + skill_name + ".yaml" if lazy else "references/tools.json"}`
+- Tool Specs: `references/tools.json`
 """
     return skill_md
 
