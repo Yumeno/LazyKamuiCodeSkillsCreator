@@ -471,22 +471,41 @@ python mcp_async_call.py \
 # [DOWNLOAD] Saved to: ./downloads/cat_4.png
 ```
 
-## 注意事項
+## 運用ルール
 
-### パス解決の基準
+### ⚠️ プロジェクトルートから実行
 
-相対パス（`./output`等）は**pythonコマンド実行時のカレントディレクトリ**を基準に解決されます。
+**重要:** スキルは必ず**プロジェクトルートから**実行してください。
+
+相対パス（`./output`等）はpythonコマンド実行時のカレントディレクトリを基準に解決されます。
+Claude Code等のCLI AIツールは通常プロジェクトルートで動作するため、この規則に従うことで
+ユーザーの期待通りの場所にファイルが保存されます。
 
 ```bash
-# プロジェクトルートから実行
-cd /project
+# ✓ 正しい実行方法（プロジェクトルートから）
 python .claude/skills/my-skill/scripts/mcp_async_call.py --output ./downloads
-# → /project/downloads/ に保存
+# → /project/downloads/ に保存（ユーザーの期待通り）
 
-# スキルディレクトリから実行
-cd /project/.claude/skills/my-skill
+# ✗ 避けるべき実行方法（スキルディレクトリから）
+cd .claude/skills/my-skill
 python scripts/mcp_async_call.py --output ./downloads
-# → /project/.claude/skills/my-skill/downloads/ に保存
+# → /project/.claude/skills/my-skill/downloads/ に保存（意図しない場所）
 ```
 
-**推奨:** 意図した場所に保存するには、絶対パスを使用するか、適切なディレクトリから実行してください。
+### 生成されるSKILL.mdの記載
+
+各スキルのSKILL.mdには、この運用ルールが記載されています：
+
+```markdown
+> **⚠️ 実行ディレクトリについて**
+> このスキルは**プロジェクトルートから**実行してください。
+> ユーザーが相対パス（例: `./output`）で保存先を指定した場合、プロジェクトルート基準で解釈してください。
+```
+
+### LLM向けガイドライン
+
+AIがこのスキルを使用する際は以下を遵守してください：
+
+1. **実行場所**: 常にプロジェクトルートから実行
+2. **パスの解釈**: ユーザーの相対パス指定はプロジェクトルート基準
+3. **コマンド形式**: `python .claude/skills/{skill}/scripts/...` を使用
