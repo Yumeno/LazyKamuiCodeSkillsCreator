@@ -310,7 +310,7 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
         if header_arg:
             header_arg = " \\\n" + header_arg
 
-        bash_example = f"""python scripts/mcp_async_call.py \\
+        bash_example = f"""python .claude/skills/{skill_name}/scripts/mcp_async_call.py \\
   --endpoint "{endpoint}" \\
   --submit-tool "{pattern['submit'][0] if pattern['submit'] else 'SUBMIT_TOOL'}" \\
   --status-tool "{pattern['status'][0] if pattern['status'] else 'STATUS_TOOL'}" \\
@@ -319,9 +319,9 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
   --output ./output"""
 
         result["_usage"] = {
-            "description": "How to execute this MCP server's tools",
+            "description": "How to execute this MCP server's tools (run from project root)",
             "bash": bash_example,
-            "wrapper": f"python scripts/{skill_name.replace('-', '_')}.py --args '{example_args}'" if skill_name else None,
+            "wrapper": f"python .claude/skills/{skill_name}/scripts/{skill_name.replace('-', '_')}.py --args '{example_args}'" if skill_name else None,
         }
 
     # Add tool definitions
@@ -600,10 +600,12 @@ MCP integration for **{server_name}**.
 {auth_section}
 ## Quick Start
 
-> **Note:** All paths below are relative to the skill base directory shown above.
+> **⚠️ 実行ディレクトリについて**
+> このスキルは**プロジェクトルートから**実行してください。
+> ユーザーが相対パス（例: `./output`）で保存先を指定した場合、プロジェクトルート基準で解釈してください。
 
 ```bash
-python scripts/mcp_async_call.py \\
+python .claude/skills/{skill_name}/scripts/mcp_async_call.py \\
   --endpoint "{endpoint}" \\
   --submit-tool "{pattern['submit'][0] if pattern['submit'] else 'SUBMIT_TOOL'}" \\
   --status-tool "{pattern['status'][0] if pattern['status'] else 'STATUS_TOOL'}" \\
