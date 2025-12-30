@@ -322,6 +322,30 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
             "description": "How to execute this MCP server's tools (run from project root)",
             "bash": bash_example,
             "wrapper": f"python .claude/skills/{skill_name}/scripts/{skill_name.replace('-', '_')}.py --args '{example_args}'" if skill_name else None,
+            "options": {
+                "--endpoint, -e": "MCPサーバーのエンドポイントURL",
+                "--config, -c": ".mcp.jsonからエンドポイントを読み込み",
+                "--submit-tool": "ジョブ送信用ツール名 (必須)",
+                "--status-tool": "ステータス確認用ツール名 (必須)",
+                "--result-tool": "結果取得用ツール名 (必須)",
+                "--args, -a": "送信引数 (JSON文字列)",
+                "--args-file": "送信引数をJSONファイルから読み込み",
+                "--output, -o": "出力ディレクトリ (デフォルト: ./output)",
+                "--output-file, -O": "出力ファイルパス (上書き許可)",
+                "--auto-filename": "{request_id}_{timestamp}.{ext} 形式で命名",
+                "--poll-interval": "ポーリング間隔秒数 (デフォルト: 2.0)",
+                "--max-polls": "最大ポーリング回数 (デフォルト: 300)",
+                "--header": "カスタムヘッダー追加 (Key:Value形式、複数可)",
+                "--id-param": "ジョブIDパラメータ名 (デフォルト: request_id)",
+                "--save-logs": "{output}/logs/ にログ保存",
+                "--save-logs-inline": "出力ファイル横にログ保存",
+            },
+            "notes": {
+                "execution": "必ずプロジェクトルートから実行すること",
+                "output_path": "--output の相対パスはカレントディレクトリ基準",
+                "multi_file": "複数URLがある場合は全て自動ダウンロード (連番サフィックス付与)",
+                "extension": "拡張子は --output-file > Content-Type > URL の優先順位で決定",
+            },
         }
 
     # Add tool definitions
@@ -613,6 +637,47 @@ python .claude/skills/{skill_name}/scripts/mcp_async_call.py \\
   --args '{example_args}' \\{header_arg}
   --output ./output
 ```
+
+## CLI Options
+
+| オプション | 短縮 | 説明 | デフォルト |
+|-----------|------|------|-----------|
+| `--endpoint` | `-e` | MCPサーバーのエンドポイントURL | - |
+| `--config` | `-c` | .mcp.jsonからエンドポイントを読み込み | - |
+| `--submit-tool` | - | ジョブ送信用ツール名 (必須) | - |
+| `--status-tool` | - | ステータス確認用ツール名 (必須) | - |
+| `--result-tool` | - | 結果取得用ツール名 (必須) | - |
+| `--args` | `-a` | 送信引数 (JSON文字列) | - |
+| `--args-file` | - | 送信引数をJSONファイルから読み込み | - |
+| `--output` | `-o` | 出力ディレクトリ | `./output` |
+| `--output-file` | `-O` | 出力ファイルパス (上書き許可) | 自動生成 |
+| `--auto-filename` | - | `{{request_id}}_{{timestamp}}.{{ext}}` 形式で命名 | 無効 |
+| `--poll-interval` | - | ポーリング間隔 (秒) | `2.0` |
+| `--max-polls` | - | 最大ポーリング回数 | `300` |
+| `--header` | - | カスタムヘッダー追加 (`Key:Value`形式、複数可) | - |
+| `--id-param` | - | ジョブIDパラメータ名 | `request_id` |
+| `--save-logs` | - | `{{output}}/logs/` にログ保存 | 無効 |
+| `--save-logs-inline` | - | 出力ファイル横にログ保存 | 無効 |
+
+### 出力パス決定ルール
+
+1. `--output-file` 指定時: そのパスに保存 (上書き許可)
+2. `--auto-filename` 指定時: `{{request_id}}_{{timestamp}}.{{ext}}` 形式
+3. 上記以外: URLまたはContent-Dispositionからファイル名を推測
+
+### 拡張子決定ルール
+
+1. `--output-file` の拡張子
+2. レスポンスの `Content-Type` ヘッダー
+3. URLのパス
+4. 検出不可の場合は警告表示
+
+### 複数ファイル対応
+
+MCPサーバーが複数のURLを返す場合、全て自動でダウンロードされます:
+- `--output-file result.png` → `result_1.png`, `result_2.png`, ...
+- 戻り値に `saved_paths` (リスト) と `saved_path` (最初のファイル、後方互換) が含まれます
+
 {async_section}{upload_section}
 {tool_docs_section}
 ## Usage Examples
