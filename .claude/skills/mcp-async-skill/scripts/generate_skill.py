@@ -21,6 +21,13 @@ try:
 except ImportError:
     requests = None
 
+# Force UTF-8 encoding for stdout/stderr (prevents UnicodeEncodeError on Windows)
+# Python 3.7+ required
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 # Default catalog URL
 CATALOG_URL = "https://raw.githubusercontent.com/Yumeno/kamuicode-config-manager/main/mcp_tool_catalog.yaml"
 
