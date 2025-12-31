@@ -870,6 +870,12 @@ def generate_wrapper_script(mcp_config: dict, tools: list[dict], skill_name: str
 import sys
 import os
 
+# Force UTF-8 encoding for stdout/stderr (prevents UnicodeEncodeError on Windows)
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 # Add parent scripts to path
 sys.path.insert(0, os.path.dirname(__file__))
 
