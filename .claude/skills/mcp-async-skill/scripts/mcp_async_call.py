@@ -16,13 +16,16 @@ from typing import Any
 from urllib.parse import urlparse
 
 # Force UTF-8 encoding for stdout/stderr/stdin (prevents UnicodeEncodeError on Windows)
-# Python 3.7+ required
-if sys.stdout and hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding='utf-8')
-if sys.stderr and hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding='utf-8')
-if sys.stdin and hasattr(sys.stdin, "reconfigure"):
-    sys.stdin.reconfigure(encoding='utf-8')
+# Python 3.7+ required. errors='backslashreplace' ensures no crash on unencodable chars.
+try:
+    if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding='utf-8', errors='backslashreplace')
+    if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
+    if sys.stdin and hasattr(sys.stdin, "reconfigure"):
+        sys.stdin.reconfigure(encoding='utf-8', errors='backslashreplace')
+except Exception:
+    pass  # reconfigure failed, continue with default encoding
 
 import requests
 
