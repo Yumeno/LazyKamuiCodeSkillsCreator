@@ -1,6 +1,6 @@
 ---
 name: mcp-async-skill
-description: Generate Skills from HTTP MCP servers with async job patterns (submit/status/result). Use when converting MCP specifications (.mcp.json) into reusable Skills using mcp_tool_catalog.yaml, or when calling async MCP tools via JSON-RPC 2.0 with session-based polling.
+description: Generate Skills from HTTP MCP servers with async job patterns (submit/status/result). Use when converting MCP specifications (.mcp.json) into reusable Skills using mcp_tool_catalog.yaml. Supports --lazy mode for context-saving generation. Also use for calling async MCP tools via JSON-RPC 2.0 with session-based polling.
 ---
 
 # MCP Async Skill Generator
