@@ -701,7 +701,7 @@ Examples:
     if args.args:
         submit_args = json.loads(args.args)
     elif args.args_file:
-        with open(args.args_file) as f:
+        with open(args.args_file, encoding='utf-8') as f:
             submit_args = json.load(f)
 
     # Run
