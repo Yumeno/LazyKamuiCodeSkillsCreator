@@ -21,6 +21,16 @@ try:
 except ImportError:
     requests = None
 
+# Force UTF-8 encoding for stdout/stderr (prevents UnicodeEncodeError on Windows)
+# Python 3.7+ required. errors='backslashreplace' ensures no crash on unencodable chars.
+try:
+    if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding='utf-8', errors='backslashreplace')
+    if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
+except Exception:
+    pass  # reconfigure failed, continue with default encoding
+
 # Default catalog URL
 CATALOG_URL = "https://raw.githubusercontent.com/Yumeno/kamuicode-config-manager/main/mcp_tool_catalog.yaml"
 
@@ -836,91 +846,82 @@ def detect_id_param_name(tools: list[dict]) -> str:
 
 
 def generate_wrapper_script(mcp_config: dict, tools: list[dict], skill_name: str) -> str:
-    """Generate convenience wrapper script."""
+    """Generate convenience wrapper script that delegates to mcp_async_call.py."""
     endpoint = mcp_config.get("url") or mcp_config.get("endpoint", "")
     pattern = identify_async_pattern(tools)
     id_param_name = detect_id_param_name(tools)
 
-    # Get auth headers if specified
+    # Get auth headers for --header arguments
     all_headers = mcp_config.get("all_headers", {})
     auth_header = mcp_config.get("auth_header", "")
     auth_value = mcp_config.get("auth_value", "")
-    headers_code = ""
+
+    header_defaults = []
     if all_headers:
-        headers_dict = {"Content-Type": "application/json", **all_headers}
-        headers_code = f'''
-    # Authentication headers
-    headers = kwargs.get("headers") or {json.dumps(headers_dict)}
-'''
+        for k, v in all_headers.items():
+            header_defaults.append(f'    ("--header", "{k}:{v}"),')
     elif auth_header and auth_value:
-        headers_code = f'''
-    # Authentication header
-    headers = kwargs.get("headers") or {{"Content-Type": "application/json", "{auth_header}": "{auth_value}"}}
-'''
-    else:
-        headers_code = '''
-    headers = kwargs.get("headers")
-'''
+        header_defaults.append(f'    ("--header", "{auth_header}:{auth_value}"),')
+
+    header_defaults_str = "\n".join(header_defaults) if header_defaults else ""
 
     script = f'''#!/usr/bin/env python3
 """
-{skill_name} - Convenience wrapper for MCP async calls.
+{skill_name} - Wrapper with preset defaults for mcp_async_call.py
+
+This wrapper pre-configures endpoint, tool names, and authentication.
+All mcp_async_call.py options are supported and can override defaults.
+
+Usage:
+    python {skill_name.replace('-', '_')}.py --args '{{"prompt": "..."}}'
+    python {skill_name.replace('-', '_')}.py --args '{{"prompt": "..."}}' --auto-filename --save-logs
+    python {skill_name.replace('-', '_')}.py --help  # Show all available options
 """
 
 import sys
 import os
 
-# Add parent scripts to path
-sys.path.insert(0, os.path.dirname(__file__))
+# Force UTF-8 encoding for stdout/stderr (prevents UnicodeEncodeError on Windows)
+try:
+    if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding='utf-8', errors='backslashreplace')
+    if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
+except Exception:
+    pass
 
-from mcp_async_call import run_async_mcp_job
+# Preset defaults (injected if not specified by user)
+DEFAULTS = [
+    ("--endpoint", "{endpoint}"),
+    ("--submit-tool", "{pattern['submit'][0] if pattern['submit'] else 'submit'}"),
+    ("--status-tool", "{pattern['status'][0] if pattern['status'] else 'status'}"),
+    ("--result-tool", "{pattern['result'][0] if pattern['result'] else 'result'}"),
+    ("--id-param", "{id_param_name}"),
+{header_defaults_str}
+]
 
-# Default configuration
-ENDPOINT = "{endpoint}"
-SUBMIT_TOOL = "{pattern['submit'][0] if pattern['submit'] else 'submit'}"
-STATUS_TOOL = "{pattern['status'][0] if pattern['status'] else 'status'}"
-RESULT_TOOL = "{pattern['result'][0] if pattern['result'] else 'result'}"
-ID_PARAM_NAME = "{id_param_name}"
+def main():
+    # Inject defaults into sys.argv (only if not already specified)
+    args = sys.argv[1:]
+    for key, value in DEFAULTS:
+        # For --header, always add (can have multiple)
+        if key == "--header":
+            if key not in args:
+                args = [key, value] + args
+        # For other options, only add if not specified
+        elif key not in args:
+            args = [key, value] + args
 
+    sys.argv = [sys.argv[0]] + args
 
-def run(arguments: dict, output_dir: str = "./output", **kwargs) -> dict:
-    """
-    Run {skill_name} job with given arguments.
-
-    Args:
-        arguments: Tool input arguments
-        output_dir: Where to save output files
-        **kwargs: Additional options (poll_interval, max_polls, headers, id_param_name)
-
-    Returns:
-        dict with request_id, status, download_url, saved_path
-    """
-{headers_code}
-    return run_async_mcp_job(
-        endpoint=kwargs.get("endpoint", ENDPOINT),
-        submit_tool=kwargs.get("submit_tool", SUBMIT_TOOL),
-        submit_args=arguments,
-        status_tool=kwargs.get("status_tool", STATUS_TOOL),
-        result_tool=kwargs.get("result_tool", RESULT_TOOL),
-        output_dir=output_dir,
-        poll_interval=kwargs.get("poll_interval", 2.0),
-        max_polls=kwargs.get("max_polls", 300),
-        headers=headers,
-        id_param_name=kwargs.get("id_param_name", ID_PARAM_NAME),
-    )
+    # Import and run mcp_async_call.py main
+    sys.path.insert(0, os.path.dirname(__file__))
+    from mcp_async_call import main as mcp_main
+    mcp_main()
 
 
 if __name__ == "__main__":
-    import argparse
-    import json
-
-    parser = argparse.ArgumentParser(description="Run {skill_name}")
-    parser.add_argument("--args", "-a", required=True, help="Arguments as JSON")
-    parser.add_argument("--output", "-o", default="./output", help="Output path")
-    args = parser.parse_args()
-
-    result = run(json.loads(args.args), args.output)
-    print(json.dumps(result, indent=2))
+    main()
 '''
     return script
 
