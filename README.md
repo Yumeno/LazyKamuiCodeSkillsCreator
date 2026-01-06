@@ -1,4 +1,4 @@
-# KamuiCodeSkillsCreator
+# LazyKamuiCodeSkillsCreator
 
 > **Fork元**: このリポジトリは [えるさん (@el_el_san)](https://x.com/el_el_san) 開発の [KamuiCodeSkillsCreator](https://github.com/el-el-san/KamuiCodeSkillsCreator) のフォークです。
 > 開発記事: [note.com](https://note.com/el_el_san/n/n6d160cbe88ad?sub_rt=share_pb)
