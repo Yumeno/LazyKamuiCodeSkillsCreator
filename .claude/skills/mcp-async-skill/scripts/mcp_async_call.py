@@ -29,6 +29,15 @@ except Exception:
 
 import requests
 
+
+class MCPJobError(Exception):
+    """Exception raised when MCP job fails, containing partial results."""
+
+    def __init__(self, message: str, partial_result: dict | None = None):
+        super().__init__(message)
+        self.partial_result = partial_result or {}
+
+
 # Content-Type to extension mapping
 CONTENT_TYPE_MAP = {
     "image/png": ".png",
@@ -496,6 +505,8 @@ def run_async_mcp_job(
         - download_url: First download URL (backward compat)
         - saved_path: First saved file path (backward compat)
         - log_paths: List of log file paths (if logging enabled)
+        - error: Error message if an error occurred (partial result)
+        - download_errors: List of download error details (if any downloads failed)
     """
     completed_statuses = completed_statuses or ["completed", "done", "success", "finished", "ready"]
     failed_statuses = failed_statuses or ["failed", "error", "cancelled", "timeout"]
@@ -506,130 +517,246 @@ def run_async_mcp_job(
     logs = {}
     timestamp_now = lambda: datetime.now().isoformat()
 
-    # Step 1: Submit
-    print(f"[SUBMIT] Calling {submit_tool}...")
-    logs["submit_request"] = {
-        "timestamp": timestamp_now(),
-        "tool": submit_tool,
-        "arguments": submit_args,
-    }
-    request_id = client.submit(submit_tool, submit_args)
-    logs["submit_response"] = {
-        "timestamp": timestamp_now(),
-        "tool": submit_tool,
-        "request_id": request_id,
-    }
-    print(f"[SUBMIT] Request ID: {request_id}")
-
-    # Step 2: Poll status
-    print(f"[STATUS] Polling {status_tool}...")
-    status = "pending"
+    # Track state for partial results
+    request_id = None
+    status = None
     poll_count = 0
     status_result = {}
-
-    while poll_count < max_polls:
-        poll_count += 1
-        status_resp = client.check_status(status_tool, request_id, id_param_name)
-        status, status_result = parse_status_response(status_resp)
-        print(f"[STATUS] Poll {poll_count}: {status}")
-
-        if status in completed_statuses:
-            print("[STATUS] Job completed!")
-            break
-        if status in failed_statuses:
-            raise RuntimeError(f"Job failed with status: {status}, details: {status_result}")
-
-        time.sleep(poll_interval)
-    else:
-        raise TimeoutError(f"Job did not complete within {max_polls} polls")
-
-    logs["status_final"] = {
-        "timestamp": timestamp_now(),
-        "tool": status_tool,
-        "poll_count": poll_count,
-        "status": status,
-        "response": status_result,
-    }
-
-    # Step 3: Get result
-    print(f"[RESULT] Calling {result_tool}...")
-    result_resp = client.get_result(result_tool, request_id, id_param_name)
-    logs["result_response"] = {
-        "timestamp": timestamp_now(),
-        "tool": result_tool,
-        "response": result_resp,
-    }
-    # Extract all download URLs
-    download_urls = extract_download_urls(result_resp)
-
-    if not download_urls:
-        # Maybe URLs are in status response
-        download_urls = extract_download_urls(status_result)
-
-    if not download_urls:
-        # Save logs even if no download URL
-        log_paths = []
-        if save_logs_to_dir or save_logs_inline:
-            log_paths = save_logs(
-                logs=logs,
-                output_dir=output_dir,
-                saved_filepath=None,
-                save_to_logs_dir=save_logs_to_dir,
-                save_inline=False,  # Can't do inline without a file
-            )
-        return {
-            "request_id": request_id,
-            "status": status,
-            "result": result_resp,
-            "note": "No download URL found in result",
-            "log_paths": log_paths,
-        }
-
-    # Step 4: Download all files
+    result_resp = None
+    download_urls = []
     saved_paths = []
-    for i, url in enumerate(download_urls):
-        print(f"[DOWNLOAD] ({i + 1}/{len(download_urls)}) {url}")
-
-        # For multiple files, add index suffix to output_file if specified
-        current_output_file = output_file
-        if output_file and len(download_urls) > 1:
-            base, ext = os.path.splitext(output_file)
-            current_output_file = f"{base}_{i + 1}{ext}"
-
-        saved_path = download_file(
-            url=url,
-            output_dir=output_dir,
-            output_file=current_output_file,
-            headers=None,  # Don't use MCP headers for download
-            request_id=request_id,
-            auto_filename_mode=auto_filename,
-        )
-        saved_paths.append(saved_path)
-        print(f"[DOWNLOAD] Saved to: {saved_path}")
-
-    # Step 5: Save logs if requested
+    download_errors = []
+    error_message = None
     log_paths = []
-    if save_logs_to_dir or save_logs_inline:
-        log_paths = save_logs(
+
+    def _save_logs_if_enabled(saved_filepath: str | None = None) -> list[str]:
+        """Helper to save logs if logging is enabled."""
+        if not (save_logs_to_dir or save_logs_inline):
+            return []
+        return save_logs(
             logs=logs,
             output_dir=output_dir,
-            saved_filepath=saved_paths[0] if saved_paths else None,
+            saved_filepath=saved_filepath,
             save_to_logs_dir=save_logs_to_dir,
-            save_inline=save_logs_inline,
+            save_inline=save_logs_inline if saved_filepath else False,
         )
+
+    try:
+        # Step 1: Submit
+        print(f"[SUBMIT] Calling {submit_tool}...")
+        logs["submit_request"] = {
+            "timestamp": timestamp_now(),
+            "tool": submit_tool,
+            "arguments": submit_args,
+        }
+
+        try:
+            request_id = client.submit(submit_tool, submit_args)
+            logs["submit_response"] = {
+                "timestamp": timestamp_now(),
+                "tool": submit_tool,
+                "request_id": request_id,
+            }
+            print(f"[SUBMIT] Request ID: {request_id}")
+        except Exception as e:
+            logs["submit_error"] = {
+                "timestamp": timestamp_now(),
+                "tool": submit_tool,
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
+            raise
+
+        # Step 2: Poll status
+        print(f"[STATUS] Polling {status_tool}...")
+        status = "pending"
+
+        try:
+            while poll_count < max_polls:
+                poll_count += 1
+                status_resp = client.check_status(status_tool, request_id, id_param_name)
+                status, status_result = parse_status_response(status_resp)
+                print(f"[STATUS] Poll {poll_count}: {status}")
+
+                if status in completed_statuses:
+                    print("[STATUS] Job completed!")
+                    break
+                if status in failed_statuses:
+                    # Record status before raising
+                    logs["status_final"] = {
+                        "timestamp": timestamp_now(),
+                        "tool": status_tool,
+                        "poll_count": poll_count,
+                        "status": status,
+                        "response": status_result,
+                    }
+                    raise RuntimeError(f"Job failed with status: {status}, details: {status_result}")
+
+                time.sleep(poll_interval)
+            else:
+                # Timeout - record status before raising
+                logs["status_final"] = {
+                    "timestamp": timestamp_now(),
+                    "tool": status_tool,
+                    "poll_count": poll_count,
+                    "status": status,
+                    "response": status_result,
+                    "timeout": True,
+                }
+                raise TimeoutError(f"Job did not complete within {max_polls} polls")
+
+            logs["status_final"] = {
+                "timestamp": timestamp_now(),
+                "tool": status_tool,
+                "poll_count": poll_count,
+                "status": status,
+                "response": status_result,
+            }
+        except (RuntimeError, TimeoutError):
+            raise
+        except Exception as e:
+            logs["status_error"] = {
+                "timestamp": timestamp_now(),
+                "tool": status_tool,
+                "poll_count": poll_count,
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
+            raise
+
+        # Step 3: Get result
+        print(f"[RESULT] Calling {result_tool}...")
+        try:
+            result_resp = client.get_result(result_tool, request_id, id_param_name)
+            logs["result_response"] = {
+                "timestamp": timestamp_now(),
+                "tool": result_tool,
+                "response": result_resp,
+            }
+        except Exception as e:
+            logs["result_error"] = {
+                "timestamp": timestamp_now(),
+                "tool": result_tool,
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
+            raise
+
+        # Extract all download URLs
+        download_urls = extract_download_urls(result_resp)
+
+        if not download_urls:
+            # Maybe URLs are in status response
+            download_urls = extract_download_urls(status_result)
+
+        if not download_urls:
+            # No download URL found - still save logs
+            log_paths = _save_logs_if_enabled(None)
+            return {
+                "request_id": request_id,
+                "status": status,
+                "result": result_resp,
+                "note": "No download URL found in result",
+                "log_paths": log_paths,
+            }
+
+        # Step 4: Download all files (with individual error handling)
+        for i, url in enumerate(download_urls):
+            print(f"[DOWNLOAD] ({i + 1}/{len(download_urls)}) {url}")
+
+            # For multiple files, add index suffix to output_file if specified
+            current_output_file = output_file
+            if output_file and len(download_urls) > 1:
+                base, ext = os.path.splitext(output_file)
+                current_output_file = f"{base}_{i + 1}{ext}"
+
+            try:
+                saved_path = download_file(
+                    url=url,
+                    output_dir=output_dir,
+                    output_file=current_output_file,
+                    headers=None,  # Don't use MCP headers for download
+                    request_id=request_id,
+                    auto_filename_mode=auto_filename,
+                )
+                saved_paths.append(saved_path)
+                print(f"[DOWNLOAD] Saved to: {saved_path}")
+            except Exception as e:
+                error_detail = {
+                    "url": url,
+                    "index": i,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                }
+                download_errors.append(error_detail)
+                print(f"[DOWNLOAD] ERROR: {e}", file=sys.stderr)
+
+        # Record download results in logs
+        if download_errors:
+            logs["download_errors"] = {
+                "timestamp": timestamp_now(),
+                "errors": download_errors,
+                "successful_count": len(saved_paths),
+                "failed_count": len(download_errors),
+            }
+
+        # Step 5: Save logs
+        log_paths = _save_logs_if_enabled(saved_paths[0] if saved_paths else None)
         if log_paths:
             print(f"[LOGS] Saved {len(log_paths)} log file(s)")
 
-    return {
-        "request_id": request_id,
-        "status": status,
-        "download_urls": download_urls,
-        "saved_paths": saved_paths,
-        # Backward compatibility (first file)
-        "download_url": download_urls[0] if download_urls else None,
-        "saved_path": saved_paths[0] if saved_paths else None,
-        "log_paths": log_paths,
-    }
+        result = {
+            "request_id": request_id,
+            "status": status,
+            "download_urls": download_urls,
+            "saved_paths": saved_paths,
+            # Backward compatibility (first file)
+            "download_url": download_urls[0] if download_urls else None,
+            "saved_path": saved_paths[0] if saved_paths else None,
+            "log_paths": log_paths,
+        }
+
+        if download_errors:
+            result["download_errors"] = download_errors
+            if not saved_paths:
+                result["error"] = "All downloads failed"
+
+        return result
+
+    except Exception as e:
+        # Capture the error for the result
+        error_message = str(e)
+        logs["error"] = {
+            "timestamp": timestamp_now(),
+            "error": error_message,
+            "error_type": type(e).__name__,
+        }
+
+        # Save partial logs even on error
+        log_paths = _save_logs_if_enabled(saved_paths[0] if saved_paths else None)
+        if log_paths:
+            print(f"[LOGS] Saved {len(log_paths)} log file(s) (partial due to error)")
+
+        # Build partial result with error info
+        partial_result = {
+            "request_id": request_id,
+            "status": status,
+            "error": error_message,
+            "error_type": type(e).__name__,
+            "log_paths": log_paths,
+        }
+
+        # Include any partial data that was collected
+        if download_urls:
+            partial_result["download_urls"] = download_urls
+        if saved_paths:
+            partial_result["saved_paths"] = saved_paths
+            partial_result["saved_path"] = saved_paths[0]
+        if download_errors:
+            partial_result["download_errors"] = download_errors
+
+        # Raise MCPJobError with partial result attached
+        raise MCPJobError(error_message, partial_result) from e
 
 
 def load_mcp_config(config_path: str) -> dict:
@@ -705,25 +832,35 @@ Examples:
             submit_args = json.load(f)
 
     # Run
-    result = run_async_mcp_job(
-        endpoint=endpoint,
-        submit_tool=args.submit_tool,
-        submit_args=submit_args,
-        status_tool=args.status_tool,
-        result_tool=args.result_tool,
-        output_dir=args.output,
-        output_file=args.output_file,
-        auto_filename=args.auto_filename,
-        poll_interval=args.poll_interval,
-        max_polls=args.max_polls,
-        headers=headers,
-        id_param_name=args.id_param,
-        save_logs_to_dir=args.save_logs,
-        save_logs_inline=args.save_logs_inline,
-    )
+    exit_code = 0
+    try:
+        result = run_async_mcp_job(
+            endpoint=endpoint,
+            submit_tool=args.submit_tool,
+            submit_args=submit_args,
+            status_tool=args.status_tool,
+            result_tool=args.result_tool,
+            output_dir=args.output,
+            output_file=args.output_file,
+            auto_filename=args.auto_filename,
+            poll_interval=args.poll_interval,
+            max_polls=args.max_polls,
+            headers=headers,
+            id_param_name=args.id_param,
+            save_logs_to_dir=args.save_logs,
+            save_logs_inline=args.save_logs_inline,
+        )
+    except MCPJobError as e:
+        # Job failed but we have partial results (logs may have been saved)
+        result = e.partial_result
+        exit_code = 1
+        print(f"\n[ERROR] {e}", file=sys.stderr)
 
     print("\n=== Result ===")
     print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    if exit_code != 0:
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":
