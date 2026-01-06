@@ -533,12 +533,16 @@ def run_async_mcp_job(
         """Helper to save logs if logging is enabled."""
         if not (save_logs_to_dir or save_logs_inline):
             return []
+        # If save_logs_inline is requested but no file was saved,
+        # fallback to saving in logs directory
+        actual_save_to_logs_dir = save_logs_to_dir or (save_logs_inline and not saved_filepath)
+        actual_save_inline = save_logs_inline and saved_filepath is not None
         return save_logs(
             logs=logs,
             output_dir=output_dir,
             saved_filepath=saved_filepath,
-            save_to_logs_dir=save_logs_to_dir,
-            save_inline=save_logs_inline if saved_filepath else False,
+            save_to_logs_dir=actual_save_to_logs_dir,
+            save_inline=actual_save_inline,
         )
 
     try:
