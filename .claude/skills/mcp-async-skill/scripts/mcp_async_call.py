@@ -155,13 +155,13 @@ class MCPAsyncClient:
                             pass
         raise ValueError(f"Could not extract request_id/session_id from submit response: {result}")
 
-    def check_status(self, status_tool: str, request_id: str, id_param_name: str = "request_id") -> dict:
+    def check_status(self, status_tool: str, request_id: str) -> dict:
         """Check job status."""
-        return self.call_tool(status_tool, {id_param_name: request_id})
+        return self.call_tool(status_tool, {"request_id": request_id})
 
-    def get_result(self, result_tool: str, request_id: str, id_param_name: str = "request_id") -> dict:
+    def get_result(self, result_tool: str, request_id: str) -> dict:
         """Get job result."""
-        return self.call_tool(result_tool, {id_param_name: request_id})
+        return self.call_tool(result_tool, {"request_id": request_id})
 
 
 def parse_status_response(result: dict) -> tuple[str, dict]:
@@ -463,7 +463,6 @@ def run_async_mcp_job(
     headers: dict | None = None,
     completed_statuses: list[str] | None = None,
     failed_statuses: list[str] | None = None,
-    id_param_name: str = "request_id",
     save_logs_to_dir: bool = False,
     save_logs_inline: bool = False,
 ) -> dict:
@@ -484,7 +483,6 @@ def run_async_mcp_job(
         headers: Additional HTTP headers (auth, etc.)
         completed_statuses: List of status strings indicating completion
         failed_statuses: List of status strings indicating failure
-        id_param_name: Parameter name for job ID (request_id or session_id)
         save_logs_to_dir: Save logs to {output_dir}/logs/
         save_logs_inline: Save logs alongside downloaded file
 
@@ -529,7 +527,7 @@ def run_async_mcp_job(
 
     while poll_count < max_polls:
         poll_count += 1
-        status_resp = client.check_status(status_tool, request_id, id_param_name)
+        status_resp = client.check_status(status_tool, request_id)
         status, status_result = parse_status_response(status_resp)
         print(f"[STATUS] Poll {poll_count}: {status}")
 
@@ -553,7 +551,7 @@ def run_async_mcp_job(
 
     # Step 3: Get result
     print(f"[RESULT] Calling {result_tool}...")
-    result_resp = client.get_result(result_tool, request_id, id_param_name)
+    result_resp = client.get_result(result_tool, request_id)
     logs["result_response"] = {
         "timestamp": timestamp_now(),
         "tool": result_tool,
@@ -673,7 +671,6 @@ Examples:
     parser.add_argument("--poll-interval", type=float, default=2.0, help="Poll interval in seconds")
     parser.add_argument("--max-polls", type=int, default=300, help="Maximum poll attempts")
     parser.add_argument("--header", action="append", help="Add header (format: Key:Value)")
-    parser.add_argument("--id-param", default="request_id", help="Job ID parameter name (request_id or session_id)")
     parser.add_argument("--save-logs", action="store_true", help="Save logs to {output}/logs/")
     parser.add_argument("--save-logs-inline", action="store_true", help="Save logs alongside output file")
 
@@ -717,7 +714,6 @@ Examples:
         poll_interval=args.poll_interval,
         max_polls=args.max_polls,
         headers=headers,
-        id_param_name=args.id_param,
         save_logs_to_dir=args.save_logs,
         save_logs_inline=args.save_logs_inline,
     )
