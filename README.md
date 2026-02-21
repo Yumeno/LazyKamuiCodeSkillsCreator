@@ -21,6 +21,7 @@ Claude Code用のMCPスキルジェネレーター。非同期ジョブパター
 | **重複ファイル回避** | 同名ファイル存在時にサフィックス自動付与（`_1`, `_2`...） | 自動 | [📖](docs/output-path-strategy.md) |
 | **ログ保存** | リクエスト/レスポンスJSONを保存（logsフォルダまたはインライン） | `--save-logs`, `--save-logs-inline` | [📖](docs/output-path-strategy.md) |
 | **複数ファイル対応** | レスポンス内の全URLを再帰探索し一括ダウンロード。連番サフィックス自動付与 | 自動 | [📖](docs/output-path-strategy.md) |
+| **キューイングシステム** | ローカルワーカーによるリクエスト並行数・実行間隔の制御。エンドポイント別レートリミット、自動起動・終了 | `--submit-only`, `--wait`, `--blocking` | [📖](docs/queue_system_design.md) |
 
 ### ⚠️ 実行ディレクトリについて
 
@@ -50,6 +51,8 @@ python scripts/mcp_async_call.py \
                 ↓
            通常モード: SKILL.md（全詳細）+ tools.json
            Lazyモード: SKILL.md（軽量）+ tools/{skill}.yaml（実行例付き）
+                ↓
+           キューイング: ローカルワーカーがリクエスト並行数を制御
 ```
 
 ### Lazyモードのメリット
@@ -285,6 +288,9 @@ python scripts/mcp_async_call.py \
 | `--config, -c` | .mcp.jsonからエンドポイントを読み込み |
 | `--save-logs` | `{output}/logs/` にリクエスト/レスポンスログを保存 |
 | `--save-logs-inline` | 出力ファイルと同じ場所に `{filename}_*.json` 形式でログ保存 |
+| `--submit-only` | ジョブをキューに投入し `job_id` を返して即終了 |
+| `--wait JOB_ID` | 指定ジョブの状態を1回確認して返却 |
+| `--blocking` | submit → wait ポーリング → ダウンロードを一括実行（デフォルト、従来互換） |
 
 **拡張子の決定順序:**
 1. `--output-file` で指定されている場合はその拡張子
@@ -430,6 +436,43 @@ flux_lora_result:
 ```
 
 AIはこのYAMLファイル1つを読むだけで、実行に必要な情報をすべて取得できます。
+
+## キューイングシステム（設計段階）
+
+AIエージェントが複数ツールを並列に高速呼び出しした場合、外部MCPサーバーへのアクセス集中やレートリミット（429）エラーを防ぐためのキューイング層です。
+
+### アーキテクチャ
+
+```
+[Client] ──HTTP──> [Worker Daemon (Singleton)] ──> [SQLite] ──> [外部MCPサーバー]
+                   エンドポイント別レートリミット
+                   自動起動・自動終了
+```
+
+### 主な特徴
+
+| 特徴 | 説明 |
+|-----|------|
+| **エンドポイント別制御** | 宛先ごとに独立したキューと並行数・間隔を設定。Head-of-Lineブロッキングを防止 |
+| **3つの動作モード** | `--submit-only`（投入のみ）、`--wait`（状態確認）、`--blocking`（従来互換） |
+| **自動起動・終了** | ワーカー未起動時は自動起動、アイドル時は自動終了 |
+| **クロスプラットフォーム** | Windows / macOS / Linux 対応 |
+| **標準ライブラリ中心** | `http.server`, `sqlite3`, `threading` 等を使用 |
+
+### 動作モード
+
+```bash
+# submit-only: ジョブ投入のみ（即座にjob_idを返却）
+python mcp_async_call.py --submit-only --endpoint http://... --submit-tool generate --args '{"prompt":"cat"}'
+
+# wait: ジョブ状態を1回確認
+python mcp_async_call.py --wait <job_id>
+
+# blocking: 従来互換（完了まで待機）
+python mcp_async_call.py --endpoint http://... --submit-tool generate --args '{"prompt":"cat"}'
+```
+
+> 📖 詳細: [キューイングシステム設計書](docs/queue_system_design.md)
 
 ## ライセンス
 
