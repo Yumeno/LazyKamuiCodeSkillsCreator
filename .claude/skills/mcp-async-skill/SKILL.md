@@ -240,6 +240,9 @@ Main async MCP caller with full flow automation.
 - `--config, -c`: Load endpoint from .mcp.json
 - `--save-logs`: Save request/response logs to `{output}/logs/`
 - `--save-logs-inline`: Save logs alongside output file as `{filename}_*.json`
+- `--submit-only`: Submit job to queue and return `job_id` immediately
+- `--wait JOB_ID`: Check job status once and return immediately
+- `--blocking`: Submit → poll → download in one step (default, backward compatible)
 
 **File Extension Detection:**
 
@@ -298,6 +301,25 @@ Skills are generated to `.claude/skills/<skill-name>/`:
     └── tools/
         └── <skill-name>.yaml  # Tool definitions + usage examples (YAML)
 ```
+
+## Queue System (Non-Blocking Mode)
+
+For parallel job submission with rate limiting per endpoint:
+
+```bash
+# Submit job and get job_id immediately
+python scripts/mcp_async_call.py --submit-only \
+  --endpoint "https://mcp.example.com/sse" \
+  --submit-tool "generate_image" \
+  --args '{"prompt": "a cat"}'
+# Output: {"job_id": "abc-123", "status": "pending"}
+
+# Check job status
+python scripts/mcp_async_call.py --wait abc-123
+# Output: {"job_id": "abc-123", "status": "completed", "result": {...}}
+```
+
+The local worker daemon starts automatically when needed and shuts down after idle timeout. Each endpoint has independent concurrency and interval limits configured via `queue_config.json`.
 
 ## Common Status Values
 
