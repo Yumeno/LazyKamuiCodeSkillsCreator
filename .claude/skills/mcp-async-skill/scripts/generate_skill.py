@@ -8,6 +8,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -824,10 +825,24 @@ result = resp.json()["result"]
 print(f"Download URL: {{result['url']}}")
 ```
 
+## Queue System (Rate Limiting)
+
+This skill includes a local queue system that controls request rates to the MCP server.
+
+**Modes:**
+- Default (blocking): Submit job → poll until done → return result
+- `--submit-only`: Submit job and return `job_id` immediately
+- `--wait JOB_ID`: Check job status by ID
+
+**Configuration:** Edit `queue_config.json` in the skill root to adjust rate limits.
+
+**Worker auto-start:** The queue worker starts automatically on first use and stops after idle timeout.
+
 ## References
 
 - MCP Config: `references/mcp.json`
 - Tool Specs: `references/tools.json`
+- Queue Config: `queue_config.json`
 """
     return skill_md
 
@@ -843,6 +858,50 @@ def detect_id_param_name(tools: list[dict]) -> str:
         if "session_id" in properties or "sessionId" in properties:
             return "session_id"
     return "request_id"  # Default to request_id
+
+
+def generate_queue_config(endpoint: str) -> dict:
+    """Generate a default queue_config.json for the given endpoint."""
+    return {
+        "host": "127.0.0.1",
+        "port": 54321,
+        "idle_timeout_seconds": 60,
+        "default_rate_limit": {
+            "max_concurrent_jobs": 2,
+            "min_interval_seconds": 2.0,
+        },
+        "endpoint_rate_limits": {
+            endpoint: {
+                "max_concurrent_jobs": 2,
+                "min_interval_seconds": 2.0,
+            }
+        },
+    }
+
+
+def _copy_queue_files(scripts_dir: Path, skill_dir: Path, endpoint: str):
+    """Copy queue system files to generated skill directory."""
+    src_dir = Path(__file__).parent
+
+    # Copy job_queue/ package
+    jq_src = src_dir / "job_queue"
+    jq_dst = scripts_dir / "job_queue"
+    if jq_src.is_dir():
+        if jq_dst.exists():
+            shutil.rmtree(jq_dst)
+        shutil.copytree(jq_src, jq_dst, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+    # Copy mcp_worker_daemon.py
+    daemon_src = src_dir / "mcp_worker_daemon.py"
+    if daemon_src.exists():
+        (scripts_dir / "mcp_worker_daemon.py").write_text(
+            daemon_src.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+    # Generate queue_config.json
+    config = generate_queue_config(endpoint)
+    config_path = Path(skill_dir) / "queue_config.json"
+    config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def generate_wrapper_script(mcp_config: dict, tools: list[dict], skill_name: str) -> str:
@@ -897,6 +956,7 @@ DEFAULTS = [
     ("--status-tool", "{pattern['status'][0] if pattern['status'] else 'status'}"),
     ("--result-tool", "{pattern['result'][0] if pattern['result'] else 'result'}"),
     ("--id-param", "{id_param_name}"),
+    ("--queue-config", os.path.join(os.path.dirname(os.path.dirname(__file__)), "queue_config.json")),
 {header_defaults_str}
 ]
 
@@ -982,6 +1042,10 @@ def generate_skill(
     async_script = Path(__file__).parent / "mcp_async_call.py"
     if async_script.exists():
         (scripts_dir / "mcp_async_call.py").write_text(async_script.read_text(encoding='utf-8'), encoding='utf-8')
+
+    # Copy queue system files
+    _endpoint = mcp_config.get("url") or mcp_config.get("endpoint", "")
+    _copy_queue_files(scripts_dir, skill_dir, _endpoint)
 
     # Generate wrapper script
     wrapper = generate_wrapper_script(mcp_config, tools, skill_name)
@@ -1155,6 +1219,10 @@ def generate_skill_internal(
     async_script = Path(__file__).parent / "mcp_async_call.py"
     if async_script.exists():
         (scripts_dir / "mcp_async_call.py").write_text(async_script.read_text(encoding='utf-8'), encoding='utf-8')
+
+    # Copy queue system files
+    _endpoint = mcp_config.get("url") or mcp_config.get("endpoint", "")
+    _copy_queue_files(scripts_dir, skill_dir, _endpoint)
 
     # Generate wrapper script
     wrapper = generate_wrapper_script(mcp_config, tools, skill_name)

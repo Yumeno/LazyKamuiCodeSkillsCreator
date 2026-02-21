@@ -1,0 +1,19 @@
+{
+  "host": "127.0.0.1",
+  "port": 54321,
+  "idle_timeout_seconds": 60,
+  "default_rate_limit": {
+    "max_concurrent_jobs": 2,
+    "min_interval_seconds": 2.0
+  },
+  "endpoint_rate_limits": {
+    "http://localhost:8000": {
+      "max_concurrent_jobs": 1,
+      "min_interval_seconds": 10.0
+    },
+    "http://192.168.1.50:8001": {
+      "max_concurrent_jobs": 5,
+      "min_interval_seconds": 0.5
+    }
+  }
+}
