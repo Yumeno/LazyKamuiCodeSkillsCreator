@@ -636,7 +636,188 @@ def load_mcp_config(config_path: str) -> dict:
         return json.load(f)
 
 
-def main():
+def resolve_worker_url(
+    worker_url: str | None = None,
+    queue_config_path: str | None = None,
+) -> str | None:
+    """Resolve the worker URL from explicit arg or queue config file.
+
+    Returns None if neither is provided (direct execution mode).
+    """
+    if worker_url:
+        return worker_url
+    if queue_config_path and os.path.exists(queue_config_path):
+        with open(queue_config_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+        host = cfg.get("host", "127.0.0.1")
+        port = cfg.get("port", 54321)
+        return f"http://{host}:{port}"
+    if queue_config_path:
+        # Config path specified but file doesn't exist yet; use defaults
+        return "http://127.0.0.1:54321"
+    return None
+
+
+def _queue_submit_only(
+    worker_url: str,
+    endpoint: str,
+    submit_tool: str,
+    submit_args: dict,
+    status_tool: str | None = None,
+    result_tool: str | None = None,
+    headers: dict | None = None,
+) -> dict:
+    """Submit a job to the queue and return immediately."""
+    from job_queue.client import submit_job
+    return submit_job(
+        worker_url=worker_url,
+        endpoint=endpoint,
+        submit_tool=submit_tool,
+        args=submit_args,
+        status_tool=status_tool,
+        result_tool=result_tool,
+        headers=headers,
+    )
+
+
+def _queue_wait(worker_url: str, job_id: str) -> dict:
+    """Query a job's status from the queue."""
+    from job_queue.client import wait_job
+    return wait_job(worker_url=worker_url, job_id=job_id)
+
+
+def _queue_list(worker_url: str, status_filter: str | None = None) -> dict:
+    """List all jobs from the queue worker."""
+    url = f"{worker_url}/api/jobs"
+    if status_filter:
+        url += f"?status={status_filter}"
+    resp = requests.get(url, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _queue_stats(worker_url: str) -> dict:
+    """Get per-endpoint statistics from the queue worker."""
+    resp = requests.get(f"{worker_url}/api/stats", timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _queue_blocking(
+    worker_url: str,
+    endpoint: str,
+    submit_tool: str,
+    submit_args: dict,
+    status_tool: str | None = None,
+    result_tool: str | None = None,
+    headers: dict | None = None,
+    poll_interval: float = 2.0,
+    max_polls: int = 300,
+) -> dict:
+    """Submit a job and poll until completion."""
+    from job_queue.client import blocking_job
+    return blocking_job(
+        worker_url=worker_url,
+        endpoint=endpoint,
+        submit_tool=submit_tool,
+        args=submit_args,
+        status_tool=status_tool,
+        result_tool=result_tool,
+        headers=headers,
+        poll_interval=poll_interval,
+        max_polls=max_polls,
+    )
+
+
+def route_execution(
+    worker_url: str | None,
+    queue_config_path: str | None,
+    submit_only: bool,
+    wait_job_id: str | None,
+    list_jobs: bool = False,
+    show_stats: bool = False,
+    filter_status: str | None = None,
+    endpoint: str | None = None,
+    submit_tool: str | None = None,
+    submit_args: dict | None = None,
+    status_tool: str | None = None,
+    result_tool: str | None = None,
+    headers: dict | None = None,
+    output_dir: str | None = None,
+    output_file: str | None = None,
+    auto_filename: bool = False,
+    poll_interval: float = 2.0,
+    max_polls: int = 300,
+    id_param_name: str = "request_id",
+    save_logs_to_dir: bool = False,
+    save_logs_inline: bool = False,
+) -> dict:
+    """Route execution to queue system or direct MCP call."""
+    submit_args = submit_args or {}
+    headers = headers or {}
+
+    # --list mode
+    if list_jobs:
+        url = worker_url or resolve_worker_url(None, queue_config_path) or "http://127.0.0.1:54321"
+        return _queue_list(url, status_filter=filter_status)
+
+    # --stats mode
+    if show_stats:
+        url = worker_url or resolve_worker_url(None, queue_config_path) or "http://127.0.0.1:54321"
+        return _queue_stats(url)
+
+    # --wait mode
+    if wait_job_id:
+        url = worker_url or resolve_worker_url(None, queue_config_path) or "http://127.0.0.1:54321"
+        return _queue_wait(url, wait_job_id)
+
+    # Queue mode (--queue-config or --worker-url provided)
+    if worker_url or queue_config_path:
+        url = worker_url or resolve_worker_url(None, queue_config_path)
+        if submit_only:
+            return _queue_submit_only(
+                worker_url=url,
+                endpoint=endpoint,
+                submit_tool=submit_tool,
+                submit_args=submit_args,
+                status_tool=status_tool,
+                result_tool=result_tool,
+                headers=headers if headers != {"Content-Type": "application/json"} else None,
+            )
+        else:
+            return _queue_blocking(
+                worker_url=url,
+                endpoint=endpoint,
+                submit_tool=submit_tool,
+                submit_args=submit_args,
+                status_tool=status_tool,
+                result_tool=result_tool,
+                headers=headers if headers != {"Content-Type": "application/json"} else None,
+                poll_interval=poll_interval,
+                max_polls=max_polls,
+            )
+
+    # Direct execution mode (backward compatible)
+    return run_async_mcp_job(
+        endpoint=endpoint,
+        submit_tool=submit_tool,
+        submit_args=submit_args,
+        status_tool=status_tool,
+        result_tool=result_tool,
+        output_dir=output_dir,
+        output_file=output_file,
+        auto_filename=auto_filename,
+        poll_interval=poll_interval,
+        max_polls=max_polls,
+        headers=headers,
+        id_param_name=id_param_name,
+        save_logs_to_dir=save_logs_to_dir,
+        save_logs_inline=save_logs_inline,
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build the argument parser (separated for testability)."""
     parser = argparse.ArgumentParser(
         description="Run async MCP job",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -645,24 +826,21 @@ Examples:
   # Basic usage (directory output, auto filename)
   python mcp_async_call.py --endpoint "..." --submit-tool "..." --output ./results/
 
-  # Specify output filename
-  python mcp_async_call.py --endpoint "..." --submit-tool "..." --output ./results/ --output-file my_image.png
+  # Queue mode: submit only
+  python mcp_async_call.py --queue-config queue_config.json --submit-only --submit-tool "..." --args '{...}'
 
-  # Auto filename with request_id and timestamp
-  python mcp_async_call.py --endpoint "..." --submit-tool "..." --output ./results/ --auto-filename
+  # Queue mode: check job status
+  python mcp_async_call.py --queue-config queue_config.json --wait JOB_ID
 
-  # Save logs to logs/ directory
-  python mcp_async_call.py --endpoint "..." --submit-tool "..." --save-logs
-
-  # Save logs alongside output file
-  python mcp_async_call.py --endpoint "..." --submit-tool "..." --save-logs-inline
+  # Queue mode: blocking (submit + poll until done)
+  python mcp_async_call.py --queue-config queue_config.json --submit-tool "..." --args '{...}'
 """
     )
     parser.add_argument("--config", "-c", help="Path to .mcp.json config file")
     parser.add_argument("--endpoint", "-e", help="MCP server endpoint URL")
-    parser.add_argument("--submit-tool", required=True, help="Submit tool name")
-    parser.add_argument("--status-tool", required=True, help="Status tool name")
-    parser.add_argument("--result-tool", required=True, help="Result tool name")
+    parser.add_argument("--submit-tool", help="Submit tool name")
+    parser.add_argument("--status-tool", help="Status tool name")
+    parser.add_argument("--result-tool", help="Result tool name")
     parser.add_argument("--args", "-a", help="Submit arguments as JSON string")
     parser.add_argument("--args-file", help="Submit arguments from JSON file")
     parser.add_argument("--output", "-o", default="./output", help="Output directory (default: ./output)")
@@ -674,7 +852,55 @@ Examples:
     parser.add_argument("--save-logs", action="store_true", help="Save logs to {output}/logs/")
     parser.add_argument("--save-logs-inline", action="store_true", help="Save logs alongside output file")
 
+    # Queue system options
+    queue_group = parser.add_argument_group("Queue system")
+    queue_group.add_argument("--queue-config", help="Path to queue_config.json (enables queue mode)")
+    queue_group.add_argument("--worker-url", help="Worker URL (default: from queue config or http://127.0.0.1:54321)")
+    queue_group.add_argument("--submit-only", action="store_true", help="Submit job and return job_id immediately")
+    queue_group.add_argument("--wait", metavar="JOB_ID", help="Query job status by ID")
+    queue_group.add_argument("--list", action="store_true", help="List all jobs in the queue")
+    queue_group.add_argument("--stats", action="store_true", help="Show per-endpoint statistics")
+    queue_group.add_argument("--filter-status", help="Filter jobs by status (used with --list)")
+
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
+
+    # --list mode needs minimal args
+    if args.list:
+        worker_url = resolve_worker_url(args.worker_url, args.queue_config)
+        result = _queue_list(worker_url or "http://127.0.0.1:54321", status_filter=args.filter_status)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+
+    # --stats mode needs minimal args
+    if args.stats:
+        worker_url = resolve_worker_url(args.worker_url, args.queue_config)
+        result = _queue_stats(worker_url or "http://127.0.0.1:54321")
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+
+    # --wait mode needs minimal args
+    if args.wait:
+        worker_url = resolve_worker_url(args.worker_url, args.queue_config)
+        result = _queue_wait(worker_url or "http://127.0.0.1:54321", args.wait)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+
+    # Validate: submit-tool is required for non-wait modes
+    if not args.submit_tool:
+        parser.error("--submit-tool is required (unless using --wait)")
+
+    # Direct mode requires status-tool and result-tool
+    is_queue_mode = bool(args.queue_config or args.worker_url)
+    if not is_queue_mode:
+        if not args.status_tool:
+            parser.error("--status-tool is required for direct mode (use --queue-config for queue mode)")
+        if not args.result_tool:
+            parser.error("--result-tool is required for direct mode (use --queue-config for queue mode)")
 
     # Load config
     endpoint = args.endpoint
@@ -701,13 +927,21 @@ Examples:
         with open(args.args_file, encoding='utf-8') as f:
             submit_args = json.load(f)
 
+    # Resolve worker URL
+    worker_url = resolve_worker_url(args.worker_url, args.queue_config)
+
     # Run
-    result = run_async_mcp_job(
+    result = route_execution(
+        worker_url=worker_url,
+        queue_config_path=args.queue_config,
+        submit_only=args.submit_only,
+        wait_job_id=None,
         endpoint=endpoint,
         submit_tool=args.submit_tool,
         submit_args=submit_args,
         status_tool=args.status_tool,
         result_tool=args.result_tool,
+        headers=headers,
         output_dir=args.output,
         output_file=args.output_file,
         auto_filename=args.auto_filename,
