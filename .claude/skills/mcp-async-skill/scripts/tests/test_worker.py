@@ -309,5 +309,213 @@ class TestNotFoundRoute(WorkerTestBase):
         self.assertEqual(resp.status_code, 404)
 
 
+class TestRateLimitRegistration(WorkerTestBase):
+    """POST /api/jobs with rate_limits field triggers dynamic registration."""
+
+    def test_rate_limits_registered_on_submit(self):
+        """Submitting a job with rate_limits should register limits in dispatcher."""
+        resp = requests.post(
+            f"{self.base_url}/api/jobs",
+            json={
+                "endpoint": "http://new-endpoint:8000",
+                "submit_tool": "gen",
+                "args": {},
+                "rate_limits": {
+                    "max_concurrent_jobs": 1,
+                    "min_interval_seconds": 5.0,
+                },
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        # Verify the limits were registered in the dispatcher config
+        max_c, min_i = self.worker_app.dispatcher.config.get_limits(
+            "http://new-endpoint:8000"
+        )
+        self.assertEqual(max_c, 1)
+        self.assertEqual(min_i, 5.0)
+
+    def test_rate_limits_not_overwrite_existing(self):
+        """If endpoint already has limits, rate_limits in POST should not overwrite."""
+        # Pre-register limits
+        self.worker_app.dispatcher.register_endpoint_limits(
+            "http://existing:8000", 2, 3.0
+        )
+
+        resp = requests.post(
+            f"{self.base_url}/api/jobs",
+            json={
+                "endpoint": "http://existing:8000",
+                "submit_tool": "gen",
+                "args": {},
+                "rate_limits": {
+                    "max_concurrent_jobs": 99,
+                    "min_interval_seconds": 0.0,
+                },
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+
+        # Should keep original values
+        max_c, min_i = self.worker_app.dispatcher.config.get_limits(
+            "http://existing:8000"
+        )
+        self.assertEqual(max_c, 2)
+        self.assertEqual(min_i, 3.0)
+
+    def test_submit_without_rate_limits_works(self):
+        """Submitting without rate_limits should still work (backward compatible)."""
+        resp = requests.post(
+            f"{self.base_url}/api/jobs",
+            json={
+                "endpoint": "http://no-limits:8000",
+                "submit_tool": "gen",
+                "args": {},
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        # Should use defaults
+        max_c, min_i = self.worker_app.dispatcher.config.get_limits(
+            "http://no-limits:8000"
+        )
+        self.assertEqual(max_c, 5)  # default from setUp
+        self.assertEqual(min_i, 0.0)
+
+
+class TestStartupRollbackAndPurge(unittest.TestCase):
+    """WorkerApp.start() should execute rollback_fn and purge on startup."""
+
+    def test_rollback_fn_called_on_start(self):
+        """rollback_fn should be called with the store during start()."""
+        port = get_free_port()
+        rollback_called_with = []
+
+        def my_rollback(store):
+            rollback_called_with.append(store)
+
+        app = worker.WorkerApp(
+            host="127.0.0.1",
+            port=port,
+            db_path=":memory:",
+            config_dict={
+                "default_rate_limit": {
+                    "max_concurrent_jobs": 2,
+                    "min_interval_seconds": 0.0,
+                },
+            },
+            job_executor=lambda job: None,
+            idle_timeout=0,
+        )
+        app.start(rollback_fn=my_rollback)
+        time.sleep(0.2)
+        app.stop()
+
+        self.assertEqual(len(rollback_called_with), 1)
+        self.assertIs(rollback_called_with[0], app.store)
+
+    def test_purge_runs_on_start(self):
+        """Old completed/failed jobs should be purged on start."""
+        port = get_free_port()
+        import tempfile, os
+        db_file = os.path.join(tempfile.mkdtemp(), "test_purge.db")
+
+        app = worker.WorkerApp(
+            host="127.0.0.1",
+            port=port,
+            db_path=db_file,
+            config_dict={
+                "default_rate_limit": {
+                    "max_concurrent_jobs": 2,
+                    "min_interval_seconds": 0.0,
+                },
+            },
+            job_executor=lambda job: None,
+            idle_timeout=0,
+        )
+
+        # Manually insert an old completed job with an old timestamp
+        app.store.conn.execute(
+            """INSERT INTO jobs (id, endpoint, submit_tool, args, status, updated_at)
+               VALUES ('old-job', 'http://a:8000', 'g', '{}', 'completed',
+                       strftime('%Y-%m-%dT%H:%M:%f', 'now', '-2 days'))"""
+        )
+        app.store.conn.commit()
+
+        # Verify it exists
+        self.assertIsNotNone(app.store.get_job("old-job"))
+
+        # Start with 1-second retention (the job is 2 days old)
+        app.start(retention_seconds=1.0)
+        time.sleep(0.2)
+        app.stop()
+
+        # Re-open the DB to verify purge happened (stop() closes the connection)
+        verify_store = db.JobStore(db_file)
+        self.assertIsNone(verify_store.get_job("old-job"))
+        verify_store.close()
+        os.unlink(db_file)
+
+    def test_start_without_rollback_or_purge(self):
+        """start() without rollback_fn should work (backward compatible)."""
+        port = get_free_port()
+
+        app = worker.WorkerApp(
+            host="127.0.0.1",
+            port=port,
+            db_path=":memory:",
+            config_dict={
+                "default_rate_limit": {
+                    "max_concurrent_jobs": 2,
+                    "min_interval_seconds": 0.0,
+                },
+            },
+            job_executor=lambda job: None,
+            idle_timeout=0,
+        )
+        # Should not raise
+        app.start()
+        time.sleep(0.2)
+        app.stop()
+
+
+class TestResultsDir(unittest.TestCase):
+    """WorkerApp should accept and expose results_dir."""
+
+    def test_results_dir_stored(self):
+        port = get_free_port()
+        app = worker.WorkerApp(
+            host="127.0.0.1",
+            port=port,
+            db_path=":memory:",
+            config_dict={
+                "default_rate_limit": {
+                    "max_concurrent_jobs": 2,
+                    "min_interval_seconds": 0.0,
+                },
+            },
+            job_executor=lambda job: None,
+            idle_timeout=0,
+            results_dir="/tmp/test_results",
+        )
+        self.assertEqual(app.results_dir, "/tmp/test_results")
+
+    def test_results_dir_defaults_to_none(self):
+        port = get_free_port()
+        app = worker.WorkerApp(
+            host="127.0.0.1",
+            port=port,
+            db_path=":memory:",
+            config_dict={
+                "default_rate_limit": {
+                    "max_concurrent_jobs": 2,
+                    "min_interval_seconds": 0.0,
+                },
+            },
+            job_executor=lambda job: None,
+            idle_timeout=0,
+        )
+        self.assertIsNone(app.results_dir)
+
+
 if __name__ == "__main__":
     unittest.main()

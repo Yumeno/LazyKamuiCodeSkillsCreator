@@ -127,6 +127,15 @@ class _RequestHandler(BaseHTTPRequestHandler):
             # args can be dict or string; store as JSON string
             args_str = json.dumps(args) if isinstance(args, dict) else str(args)
 
+            # Register per-endpoint rate limits if provided
+            rate_limits = body.get("rate_limits")
+            if rate_limits and endpoint:
+                app.dispatcher.register_endpoint_limits(
+                    endpoint,
+                    rate_limits.get("max_concurrent_jobs", 2),
+                    rate_limits.get("min_interval_seconds", 2.0),
+                )
+
             job_id = app.store.insert_job(
                 endpoint=endpoint,
                 submit_tool=submit_tool,
@@ -153,9 +162,11 @@ class WorkerApp:
         config_dict: dict | None = None,
         job_executor: Callable[[dict], None] | None = None,
         idle_timeout: int = 60,
+        results_dir: str | None = None,
     ):
         self.host = host
         self.port = port
+        self.results_dir = results_dir
         self.store = db.JobStore(db_path)
 
         config = QueueConfig.from_dict(config_dict or {})
@@ -185,9 +196,25 @@ class WorkerApp:
         """Update last access time."""
         self._last_access = time.monotonic()
 
-    def start(self):
-        """Start HTTP server, dispatcher, and idle monitor."""
+    def start(
+        self,
+        rollback_fn: Callable | None = None,
+        retention_seconds: float = 86400.0,
+    ):
+        """Start HTTP server, dispatcher, and idle monitor.
+
+        Args:
+            rollback_fn: Optional callable(store) to handle stale jobs on startup.
+            retention_seconds: Purge completed/failed jobs older than this (default 24h).
+        """
         self._running = True
+
+        # Purge old completed/failed jobs
+        self.store.purge_old_jobs(retention_seconds)
+
+        # Run zombie job state transitions
+        if rollback_fn is not None:
+            rollback_fn(self.store)
 
         self._server = HTTPServer((self.host, self.port), _RequestHandler)
         self._server.app = self  # type: ignore
