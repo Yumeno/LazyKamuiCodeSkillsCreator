@@ -79,7 +79,7 @@ python scripts/mcp_async_call.py \
 pip install git+https://github.com/Yumeno/LazyKamuiCodeSkillsCreator.git#subdirectory=release/claude
 
 # バージョン指定
-pip install git+https://github.com/Yumeno/LazyKamuiCodeSkillsCreator.git@v1.0.0#subdirectory=release/claude
+pip install git+https://github.com/Yumeno/LazyKamuiCodeSkillsCreator.git@lazy-v2.0.0#subdirectory=release/claude
 ```
 
 インストール後は `generate-skill` コマンドが使えます：
