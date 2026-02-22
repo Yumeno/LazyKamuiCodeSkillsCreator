@@ -52,6 +52,8 @@ python scripts/mcp_async_call.py \
                 ↓
            通常モード: SKILL.md（全詳細）+ tools.json
            Lazyモード: SKILL.md（軽量）+ tools/{skill}.yaml（実行例付き）
+                ↓
+           キューイング: ローカルワーカーがリクエスト並行数を制御
 ```
 
 ### Lazyモードのメリット
@@ -299,8 +301,9 @@ python scripts/mcp_async_call.py \
 | `--save-logs-inline` | 出力ファイルと同じ場所に `{filename}_*.json` 形式でログ保存 |
 | `--queue-config` | queue_config.jsonへのパス（キューモード有効化） |
 | `--worker-url` | ワーカーURL（デフォルト: queue_config.jsonから取得） |
-| `--submit-only` | ジョブを投入してjob_idを即座に返却 |
-| `--wait JOB_ID` | 指定ジョブIDの状態を確認 |
+| `--submit-only` | ジョブをキューに投入し `job_id` を返して即終了 |
+| `--wait JOB_ID` | 指定ジョブの状態を1回確認して返却 |
+| `--blocking` | submit → wait ポーリング → ダウンロードを一括実行（デフォルト、従来互換） |
 | `--list` | キュー内の全ジョブを一覧（JSON出力） |
 | `--stats` | エンドポイント別統計情報を表示 |
 | `--filter-status` | `--list`使用時にステータスでフィルタ |
