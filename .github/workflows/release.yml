@@ -40,25 +40,35 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create ${{ github.ref_name }} \
-            mcp-async-skill.tar.gz \
-            --title "${{ github.ref_name }}" \
-            --notes "## Install
+          TAG="${{ github.ref_name }}"
+          URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/mcp-async-skill.tar.gz"
+
+          cat > release-notes.md <<'EOF'
+          ## Install
 
           ### bash (Linux / macOS / WSL / Git Bash)
-          \`\`\`bash
+          ```bash
           mkdir -p .claude/skills
-          curl -fSL -o mcp-async-skill.tar.gz https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mcp-async-skill.tar.gz
+          curl -fSL -o mcp-async-skill.tar.gz __URL__
           tar xzf mcp-async-skill.tar.gz -C .claude/skills/
           rm mcp-async-skill.tar.gz
           pip install pyyaml requests
-          \`\`\`
+          ```
 
           ### PowerShell (Windows)
-          \`\`\`powershell
+          ```powershell
           New-Item -ItemType Directory -Force -Path .claude\skills
-          curl.exe -fSL -o mcp-async-skill.tar.gz https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mcp-async-skill.tar.gz
+          curl.exe -fSL -o mcp-async-skill.tar.gz __URL__
           tar xzf mcp-async-skill.tar.gz -C .claude\skills\
           Remove-Item mcp-async-skill.tar.gz
           pip install pyyaml requests
-          \`\`\`"
+          ```
+          EOF
+
+          sed -i 's/^          //' release-notes.md
+          sed -i "s|__URL__|${URL}|g" release-notes.md
+
+          gh release create "$TAG" \
+            mcp-async-skill.tar.gz \
+            --title "$TAG" \
+            --notes-file release-notes.md
