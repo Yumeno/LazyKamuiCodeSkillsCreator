@@ -274,6 +274,7 @@ Main async MCP caller with full flow automation.
 - `--list`: List all jobs in the queue (JSON output)
 - `--stats`: Show per-endpoint statistics (JSON output)
 - `--filter-status`: Filter jobs by status (used with `--list`)
+- `--show-args`: Include original submit args in `--list` / `--wait` responses
 - `--blocking`: Submit → poll → download in one step (default, backward compatible)
 
 **File Extension Detection:**
@@ -383,6 +384,7 @@ Generated skills include a local queue system that prevents overloading MCP serv
 - The worker starts automatically on first use and stops after idle timeout (default: 60s)
 - Rate limits are configured per-endpoint in `queue_config.json`
 - Multiple skills share a single worker process and queue directory (`.claude/queue/`)
+- When the worker is stopped (idle timeout), `--list`, `--stats`, and `--wait` automatically fall back to reading from SQLite (`jobs.db`), so job data remains accessible without restarting the worker
 
 **Queue modes:**
 
@@ -404,6 +406,9 @@ python mcp_async_call.py --queue-config ../queue_config.json --list --filter-sta
 
 # Show per-endpoint statistics
 python mcp_async_call.py --queue-config ../queue_config.json --stats
+
+# List jobs with original submit args
+python mcp_async_call.py --queue-config ../queue_config.json --list --show-args
 ```
 
 **Robustness features:**
