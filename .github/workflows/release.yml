@@ -1,0 +1,61 @@
+name: Build Release Package
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Sync scripts to release directory
+        run: |
+          SRC=.claude/skills/mcp-async-skill
+          DST=release/claude/lazykamui/.claude/skills/mcp-async-skill
+
+          # Clean and recreate
+          rm -rf $DST/scripts $DST/SKILL.md
+          mkdir -p $DST/scripts/job_queue
+
+          # Copy scripts (no tests, no __pycache__)
+          cp $SRC/scripts/generate_skill.py $DST/scripts/
+          cp $SRC/scripts/mcp_async_call.py $DST/scripts/
+          cp $SRC/scripts/mcp_worker_daemon.py $DST/scripts/
+          cp $SRC/scripts/job_queue/__init__.py $DST/scripts/job_queue/
+          cp $SRC/scripts/job_queue/db.py $DST/scripts/job_queue/
+          cp $SRC/scripts/job_queue/dispatcher.py $DST/scripts/job_queue/
+          cp $SRC/scripts/job_queue/worker.py $DST/scripts/job_queue/
+          cp $SRC/scripts/job_queue/client.py $DST/scripts/job_queue/
+
+          # Copy SKILL.md
+          cp $SRC/SKILL.md $DST/
+
+      - name: Update version in pyproject.toml and __init__.py
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          sed -i "s/^version = .*/version = \"$VERSION\"/" release/claude/pyproject.toml
+          sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" release/claude/lazykamui/__init__.py
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add release/claude/
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "release: update release/claude/ to ${{ github.ref_name }}"
+            git push origin HEAD:main
+            # Update tag to include release files
+            git tag -f ${{ github.ref_name }}
+            git push origin ${{ github.ref_name }} --force
+          fi
