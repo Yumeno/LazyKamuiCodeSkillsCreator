@@ -115,9 +115,128 @@ def _with_retry(
             time.sleep(wait)
 
 
-def create_mcp_job_executor():
-    """Create the real job executor that uses MCPAsyncClient."""
-    from mcp_async_call import MCPAsyncClient, parse_status_response
+def _download_results(result_resp, job_id, results_dir):
+    """Download files from result URLs and save result.json.
+
+    Args:
+        result_resp: The raw result dict from MCP server.
+        job_id: Job ID for organizing output directory.
+        results_dir: Base directory for results. If None, skip downloads.
+
+    Returns:
+        Dict with keys: remote_result, local_files, download_errors.
+    """
+    if results_dir is None:
+        return {"remote_result": result_resp, "local_files": []}
+
+    from mcp_async_call import extract_download_urls
+
+    job_dir = os.path.join(results_dir, job_id)
+    os.makedirs(job_dir, exist_ok=True)
+
+    info = {
+        "remote_result": result_resp,
+        "local_files": [],
+        "download_errors": [],
+    }
+
+    # Save result.json
+    result_path = os.path.join(job_dir, "result.json")
+    with open(result_path, "w", encoding="utf-8") as f:
+        json.dump(info, f, ensure_ascii=False, indent=2)
+
+    # Download files
+    urls = extract_download_urls(result_resp)
+    for url in urls:
+        try:
+            saved_path = download_file(url, output_dir=job_dir)
+            info["local_files"].append(saved_path)
+        except Exception as e:
+            info["download_errors"].append(str(e))
+
+    # Re-save result.json with local file paths
+    if urls:
+        with open(result_path, "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False, indent=2)
+
+    return info
+
+
+def create_rollback_fn():
+    """Create a function that transitions zombie jobs on startup.
+
+    Returns:
+        Callable(store) that marks running jobs as failed and
+        polling jobs (with remote_job_id) as recovering.
+    """
+    def rollback_stale_jobs(store):
+        stale = store.get_stale_jobs(["running", "polling"])
+        for job in stale:
+            if job["status"] == "running" or not job.get("remote_job_id"):
+                store.update_status(
+                    job["id"], "failed",
+                    error="Worker restarted before submit completed",
+                )
+            else:
+                store.update_status(job["id"], "recovering")
+
+    return rollback_stale_jobs
+
+
+def create_mcp_job_executor(results_dir=None):
+    """Create the real job executor that uses MCPAsyncClient.
+
+    Args:
+        results_dir: Directory to save downloaded results. If None, skip downloads.
+    """
+    def _poll_and_get_result(store, job_id, client, request_id,
+                             status_tool, result_tool):
+        """Poll status and retrieve results (shared by new and recovery jobs)."""
+        import json as _json
+
+        # Poll status
+        if status_tool:
+            completed_statuses = {"completed", "done", "success", "finished", "ready"}
+            failed_statuses = {"failed", "error", "cancelled", "timeout"}
+            max_polls = 300
+            poll_interval = 2.0
+
+            for _ in range(max_polls):
+                try:
+                    status_resp = client.check_status(status_tool, request_id)
+                    status, status_result = parse_status_response(status_resp)
+                except Exception:
+                    # Individual poll errors are non-fatal; retry on next cycle
+                    time.sleep(poll_interval)
+                    continue
+
+                if status in completed_statuses:
+                    break
+                if status in failed_statuses:
+                    store.update_status(
+                        job_id, "failed",
+                        error=_json.dumps(status_result, ensure_ascii=False),
+                    )
+                    return
+
+                time.sleep(poll_interval)
+            else:
+                store.update_status(job_id, "failed", error="Polling timeout")
+                return
+
+        # Get result
+        if result_tool:
+            result_resp = _with_retry(
+                lambda: client.get_result(result_tool, request_id)
+            )
+            info = _download_results(result_resp, job_id, results_dir)
+            store.update_status(
+                job_id,
+                "completed",
+                result=_json.dumps(info, ensure_ascii=False),
+            )
+        else:
+            store.update_status(job_id, "completed", result="{}")
 
     def execute_job(job: dict):
         """Execute a single job against an external MCP server."""
@@ -134,10 +253,21 @@ def create_mcp_job_executor():
         if job.get("headers"):
             headers = _json.loads(job["headers"]) if isinstance(job["headers"], str) else job["headers"]
 
-        client = MCPAsyncClient(endpoint, headers)
+        # Recovery path: job already submitted, skip to poll+result
+        if job.get("remote_job_id"):
+            client = MCPAsyncClient(endpoint, headers)
+            client.session_id = job["session_id"]
+            _poll_and_get_result(
+                store, job["id"], client, job["remote_job_id"],
+                status_tool, result_tool,
+            )
+            return
 
-        # Submit
-        request_id = client.submit(submit_tool, args)
+        # Normal path: submit → poll → result
+        client = MCPAsyncClient(endpoint, headers)
+        request_id = _with_retry(
+            lambda: client.submit(submit_tool, args)
+        )
         store.update_status(
             job["id"],
             "polling",
@@ -145,45 +275,26 @@ def create_mcp_job_executor():
             remote_job_id=request_id,
         )
 
-        # Poll status
-        if status_tool:
-            completed = {"completed", "done", "success", "finished", "ready"}
-            failed = {"failed", "error", "cancelled", "timeout"}
-            max_polls = 300
-            poll_interval = 2.0
-
-            for _ in range(max_polls):
-                status_resp = client.check_status(status_tool, request_id)
-                status, status_result = parse_status_response(status_resp)
-
-                if status in completed:
-                    break
-                if status in failed:
-                    store.update_status(
-                        job["id"], "failed",
-                        error=_json.dumps(status_result, ensure_ascii=False),
-                    )
-                    return
-
-                time.sleep(poll_interval)
-            else:
-                store.update_status(
-                    job["id"], "failed", error="Polling timeout"
-                )
-                return
-
-        # Get result
-        if result_tool:
-            result_resp = client.get_result(result_tool, request_id)
-            store.update_status(
-                job["id"],
-                "completed",
-                result=_json.dumps(result_resp, ensure_ascii=False),
-            )
-        else:
-            store.update_status(job["id"], "completed", result="{}")
+        _poll_and_get_result(
+            store, job["id"], client, request_id,
+            status_tool, result_tool,
+        )
 
     return execute_job
+
+
+# Module-level imports for mocking in tests
+try:
+    from mcp_async_call import download_file, MCPAsyncClient, parse_status_response
+except ImportError:
+    def download_file(*args, **kwargs):
+        raise RuntimeError("mcp_async_call not available")
+
+    class MCPAsyncClient:  # type: ignore
+        pass
+
+    def parse_status_response(*args, **kwargs):
+        raise RuntimeError("mcp_async_call not available")
 
 
 def main():
