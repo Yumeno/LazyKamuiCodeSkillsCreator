@@ -11,6 +11,3 @@ output/
 mcp*.json
 tools*
 __pycache__/
-
-# Release build artifacts
-release/claude/lazykamui/.claude/
