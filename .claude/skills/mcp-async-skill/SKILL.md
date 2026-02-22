@@ -163,6 +163,33 @@ With multi-server format:
 - `python generate_skill.py -m mcp.json -s fal-ai/flux-lora` → Generates only specified server
 - `python generate_skill.py -m mcp.json -s server1 -s server2` → Multiple servers
 
+**With environment variable placeholders:**
+
+Headers can use `${VAR_NAME}` placeholders instead of plaintext credentials. Placeholders are preserved during skill generation and resolved at runtime:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "url": "https://mcp.example.com/sse",
+      "headers": {
+        "Authorization": "Bearer ${MCP_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+Resolution order:
+1. Environment variables (`os.environ`)
+2. `.env` file (searched in CWD, then home directory)
+
+`.env` file format:
+```bash
+# .env (place in project root, add to .gitignore)
+MCP_API_KEY=sk-your-actual-key
+```
+
 **Single-server format:**
 
 ```json
@@ -242,11 +269,12 @@ Main async MCP caller with full flow automation.
 - `--save-logs-inline`: Save logs alongside output file as `{filename}_*.json`
 - `--queue-config`: Path to queue_config.json (enables queue mode with rate limiting)
 - `--worker-url`: Worker URL (default: from queue config)
-- `--submit-only`: Submit job and return job_id immediately
-- `--wait JOB_ID`: Query job status by ID
+- `--submit-only`: Submit job to queue and return `job_id` immediately
+- `--wait JOB_ID`: Check job status once and return immediately
 - `--list`: List all jobs in the queue (JSON output)
 - `--stats`: Show per-endpoint statistics (JSON output)
 - `--filter-status`: Filter jobs by status (used with `--list`)
+- `--blocking`: Submit → poll → download in one step (default, backward compatible)
 
 **File Extension Detection:**
 

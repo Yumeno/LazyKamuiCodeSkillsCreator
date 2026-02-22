@@ -7,6 +7,7 @@ Handles submit → status polling → result pattern for async MCP tools.
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -28,6 +29,124 @@ except Exception:
     pass  # reconfigure failed, continue with default encoding
 
 import requests
+
+# ---------------------------------------------------------------------------
+# Environment variable placeholder resolution for header values
+# Supports ${VAR_NAME} syntax in --header values (e.g. "Bearer ${MCP_API_KEY}")
+# ---------------------------------------------------------------------------
+_PLACEHOLDER_RE = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}')
+_dotenv_loaded = False
+_dotenv_values: dict[str, str] = {}
+
+
+def _parse_dotenv(path: Path) -> dict[str, str]:
+    """Parse a .env file using only the standard library.
+
+    Supports: KEY=VALUE, KEY="VALUE", KEY='VALUE', comments (#), blank lines.
+    """
+    result: dict[str, str] = {}
+    try:
+        with open(path, encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' not in line:
+                    continue
+                key, _, value = line.partition('=')
+                key = key.strip()
+                value = value.strip()
+                # Strip surrounding quotes
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                    value = value[1:-1]
+                if key:
+                    result[key] = value
+    except (OSError, UnicodeDecodeError):
+        pass
+    return result
+
+
+def _load_dotenv_simple() -> dict[str, str]:
+    """Search for and load a .env file (CWD -> home directory).
+
+    Uses python-dotenv if available, otherwise falls back to the built-in parser.
+    Results are cached for the lifetime of the process.
+    """
+    global _dotenv_loaded, _dotenv_values
+    if _dotenv_loaded:
+        return _dotenv_values
+    _dotenv_loaded = True
+
+    search_dirs = [Path.cwd(), Path.home()]
+
+    # Prefer python-dotenv if installed
+    try:
+        from dotenv import dotenv_values
+        for search_dir in search_dirs:
+            env_path = search_dir / ".env"
+            if env_path.is_file():
+                _dotenv_values = {
+                    k: v for k, v in dotenv_values(env_path).items()
+                    if v is not None
+                }
+                return _dotenv_values
+    except ImportError:
+        pass
+
+    # Fallback: built-in parser
+    for search_dir in search_dirs:
+        env_path = search_dir / ".env"
+        if env_path.is_file():
+            _dotenv_values = _parse_dotenv(env_path)
+            return _dotenv_values
+
+    return _dotenv_values
+
+
+def resolve_header_placeholders(headers: dict[str, str]) -> dict[str, str]:
+    """Resolve ${VAR_NAME} placeholders in header values.
+
+    Resolution order: os.environ -> .env file.
+    Plaintext values pass through unchanged.
+    Exits with error if any placeholder cannot be resolved.
+    """
+    resolved: dict[str, str] = {}
+    missing_vars: list[str] = []
+
+    for key, value in headers.items():
+        if not _PLACEHOLDER_RE.search(value):
+            resolved[key] = value
+            continue
+
+        dotenv = _load_dotenv_simple()
+
+        def replacer(match: re.Match) -> str:
+            var_name = match.group(1)
+            # Environment variable takes precedence
+            env_val = os.environ.get(var_name)
+            if env_val is not None:
+                return env_val
+            # Fallback to .env file
+            dotenv_val = dotenv.get(var_name)
+            if dotenv_val is not None:
+                return dotenv_val
+            # Unresolved
+            missing_vars.append(var_name)
+            return match.group(0)
+
+        resolved[key] = _PLACEHOLDER_RE.sub(replacer, value)
+
+    if missing_vars:
+        unique_missing = sorted(set(missing_vars))
+        print(
+            f"Error: Unresolved environment variable(s): {', '.join(unique_missing)}\n"
+            f"Set them as environment variables or define in a .env file.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    return resolved
+
 
 # Content-Type to extension mapping
 CONTENT_TYPE_MAP = {
@@ -155,13 +274,13 @@ class MCPAsyncClient:
                             pass
         raise ValueError(f"Could not extract request_id/session_id from submit response: {result}")
 
-    def check_status(self, status_tool: str, request_id: str, id_param_name: str = "request_id") -> dict:
+    def check_status(self, status_tool: str, request_id: str) -> dict:
         """Check job status."""
-        return self.call_tool(status_tool, {id_param_name: request_id})
+        return self.call_tool(status_tool, {"request_id": request_id})
 
-    def get_result(self, result_tool: str, request_id: str, id_param_name: str = "request_id") -> dict:
+    def get_result(self, result_tool: str, request_id: str) -> dict:
         """Get job result."""
-        return self.call_tool(result_tool, {id_param_name: request_id})
+        return self.call_tool(result_tool, {"request_id": request_id})
 
 
 def parse_status_response(result: dict) -> tuple[str, dict]:
@@ -463,7 +582,6 @@ def run_async_mcp_job(
     headers: dict | None = None,
     completed_statuses: list[str] | None = None,
     failed_statuses: list[str] | None = None,
-    id_param_name: str = "request_id",
     save_logs_to_dir: bool = False,
     save_logs_inline: bool = False,
 ) -> dict:
@@ -484,7 +602,6 @@ def run_async_mcp_job(
         headers: Additional HTTP headers (auth, etc.)
         completed_statuses: List of status strings indicating completion
         failed_statuses: List of status strings indicating failure
-        id_param_name: Parameter name for job ID (request_id or session_id)
         save_logs_to_dir: Save logs to {output_dir}/logs/
         save_logs_inline: Save logs alongside downloaded file
 
@@ -529,7 +646,7 @@ def run_async_mcp_job(
 
     while poll_count < max_polls:
         poll_count += 1
-        status_resp = client.check_status(status_tool, request_id, id_param_name)
+        status_resp = client.check_status(status_tool, request_id)
         status, status_result = parse_status_response(status_resp)
         print(f"[STATUS] Poll {poll_count}: {status}")
 
@@ -553,7 +670,7 @@ def run_async_mcp_job(
 
     # Step 3: Get result
     print(f"[RESULT] Calling {result_tool}...")
-    result_resp = client.get_result(result_tool, request_id, id_param_name)
+    result_resp = client.get_result(result_tool, request_id)
     logs["result_response"] = {
         "timestamp": timestamp_now(),
         "tool": result_tool,
@@ -870,7 +987,6 @@ Examples:
     parser.add_argument("--poll-interval", type=float, default=2.0, help="Poll interval in seconds")
     parser.add_argument("--max-polls", type=int, default=300, help="Maximum poll attempts")
     parser.add_argument("--header", action="append", help="Add header (format: Key:Value)")
-    parser.add_argument("--id-param", default="request_id", help="Job ID parameter name (request_id or session_id)")
     parser.add_argument("--save-logs", action="store_true", help="Save logs to {output}/logs/")
     parser.add_argument("--save-logs-inline", action="store_true", help="Save logs alongside output file")
 
@@ -941,6 +1057,9 @@ def main():
             key, val = h.split(":", 1)
             headers[key.strip()] = val.strip()
 
+    # Resolve ${VAR_NAME} placeholders in header values
+    headers = resolve_header_placeholders(headers)
+
     # Parse submit arguments
     submit_args = {}
     if args.args:
@@ -969,7 +1088,6 @@ def main():
         auto_filename=args.auto_filename,
         poll_interval=args.poll_interval,
         max_polls=args.max_polls,
-        id_param_name=args.id_param,
         save_logs_to_dir=args.save_logs,
         save_logs_inline=args.save_logs_inline,
     )
