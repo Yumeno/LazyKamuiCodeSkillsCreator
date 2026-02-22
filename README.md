@@ -72,20 +72,39 @@ python scripts/mcp_async_call.py \
 
 ## セットアップ
 
-### 1. リポジトリをクローン
+### 方法A: pip install（推奨）
+
+```bash
+# 最新版をインストール
+pip install git+https://github.com/Yumeno/LazyKamuiCodeSkillsCreator.git#subdirectory=release/claude
+
+# バージョン指定
+pip install git+https://github.com/Yumeno/LazyKamuiCodeSkillsCreator.git@v1.0.0#subdirectory=release/claude
+```
+
+インストール後は `generate-skill` コマンドが使えます：
+
+```bash
+# mcp.json内の全サーバーのスキルを生成
+generate-skill -m /path/to/your/.mcp.json
+
+# 特定のサーバーのみ生成
+generate-skill -m /path/to/your/.mcp.json -s fal-ai/flux-lora
+
+# Lazyモードで生成（コンテキスト節約）
+generate-skill -m /path/to/your/.mcp.json --lazy
+
+# python -m でも実行可能
+python -m lazykamui -m /path/to/your/.mcp.json
+```
+
+### 方法B: git clone（開発者向け）
 
 ```bash
 git clone https://github.com/Yumeno/LazyKamuiCodeSkillsCreator.git
 cd LazyKamuiCodeSkillsCreator
-```
-
-### 2. 依存パッケージをインストール
-
-```bash
 pip install pyyaml requests
 ```
-
-### 3. スキルを生成
 
 ```bash
 # mcp.json内の全サーバーのスキルを生成
