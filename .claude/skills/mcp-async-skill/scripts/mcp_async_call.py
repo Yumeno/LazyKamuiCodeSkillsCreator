@@ -7,6 +7,7 @@ Handles submit → status polling → result pattern for async MCP tools.
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -28,6 +29,124 @@ except Exception:
     pass  # reconfigure failed, continue with default encoding
 
 import requests
+
+# ---------------------------------------------------------------------------
+# Environment variable placeholder resolution for header values
+# Supports ${VAR_NAME} syntax in --header values (e.g. "Bearer ${MCP_API_KEY}")
+# ---------------------------------------------------------------------------
+_PLACEHOLDER_RE = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}')
+_dotenv_loaded = False
+_dotenv_values: dict[str, str] = {}
+
+
+def _parse_dotenv(path: Path) -> dict[str, str]:
+    """Parse a .env file using only the standard library.
+
+    Supports: KEY=VALUE, KEY="VALUE", KEY='VALUE', comments (#), blank lines.
+    """
+    result: dict[str, str] = {}
+    try:
+        with open(path, encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' not in line:
+                    continue
+                key, _, value = line.partition('=')
+                key = key.strip()
+                value = value.strip()
+                # Strip surrounding quotes
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                    value = value[1:-1]
+                if key:
+                    result[key] = value
+    except (OSError, UnicodeDecodeError):
+        pass
+    return result
+
+
+def _load_dotenv_simple() -> dict[str, str]:
+    """Search for and load a .env file (CWD -> home directory).
+
+    Uses python-dotenv if available, otherwise falls back to the built-in parser.
+    Results are cached for the lifetime of the process.
+    """
+    global _dotenv_loaded, _dotenv_values
+    if _dotenv_loaded:
+        return _dotenv_values
+    _dotenv_loaded = True
+
+    search_dirs = [Path.cwd(), Path.home()]
+
+    # Prefer python-dotenv if installed
+    try:
+        from dotenv import dotenv_values
+        for search_dir in search_dirs:
+            env_path = search_dir / ".env"
+            if env_path.is_file():
+                _dotenv_values = {
+                    k: v for k, v in dotenv_values(env_path).items()
+                    if v is not None
+                }
+                return _dotenv_values
+    except ImportError:
+        pass
+
+    # Fallback: built-in parser
+    for search_dir in search_dirs:
+        env_path = search_dir / ".env"
+        if env_path.is_file():
+            _dotenv_values = _parse_dotenv(env_path)
+            return _dotenv_values
+
+    return _dotenv_values
+
+
+def resolve_header_placeholders(headers: dict[str, str]) -> dict[str, str]:
+    """Resolve ${VAR_NAME} placeholders in header values.
+
+    Resolution order: os.environ -> .env file.
+    Plaintext values pass through unchanged.
+    Exits with error if any placeholder cannot be resolved.
+    """
+    resolved: dict[str, str] = {}
+    missing_vars: list[str] = []
+
+    for key, value in headers.items():
+        if not _PLACEHOLDER_RE.search(value):
+            resolved[key] = value
+            continue
+
+        dotenv = _load_dotenv_simple()
+
+        def replacer(match: re.Match) -> str:
+            var_name = match.group(1)
+            # Environment variable takes precedence
+            env_val = os.environ.get(var_name)
+            if env_val is not None:
+                return env_val
+            # Fallback to .env file
+            dotenv_val = dotenv.get(var_name)
+            if dotenv_val is not None:
+                return dotenv_val
+            # Unresolved
+            missing_vars.append(var_name)
+            return match.group(0)
+
+        resolved[key] = _PLACEHOLDER_RE.sub(replacer, value)
+
+    if missing_vars:
+        unique_missing = sorted(set(missing_vars))
+        print(
+            f"Error: Unresolved environment variable(s): {', '.join(unique_missing)}\n"
+            f"Set them as environment variables or define in a .env file.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    return resolved
+
 
 # Content-Type to extension mapping
 CONTENT_TYPE_MAP = {
@@ -918,6 +1037,9 @@ def main():
         for h in args.header:
             key, val = h.split(":", 1)
             headers[key.strip()] = val.strip()
+
+    # Resolve ${VAR_NAME} placeholders in header values
+    headers = resolve_header_placeholders(headers)
 
     # Parse submit arguments
     submit_args = {}
