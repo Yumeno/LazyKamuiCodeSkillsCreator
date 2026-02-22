@@ -801,27 +801,167 @@ def _queue_submit_only(
     )
 
 
-def _queue_wait(worker_url: str, job_id: str) -> dict:
-    """Query a job's status from the queue."""
-    from job_queue.client import wait_job
-    return wait_job(worker_url=worker_url, job_id=job_id)
+def _resolve_db_path(queue_config_path: str | None = None) -> str | None:
+    """Resolve the path to jobs.db for SQLite fallback.
+
+    Searches for the project root via ``queue_config_path`` (if given) or
+    the current working directory, then checks for ``.claude/queue/jobs.db``.
+    """
+    from mcp_worker_daemon import find_project_root
+
+    if queue_config_path and os.path.exists(queue_config_path):
+        project_root = find_project_root(queue_config_path)
+        db_path = os.path.join(project_root, ".claude", "queue", "jobs.db")
+        if os.path.exists(db_path):
+            return db_path
+
+    project_root = find_project_root(os.getcwd())
+    db_path = os.path.join(project_root, ".claude", "queue", "jobs.db")
+    if os.path.exists(db_path):
+        return db_path
+
+    return None
 
 
-def _queue_list(worker_url: str, status_filter: str | None = None) -> dict:
-    """List all jobs from the queue worker."""
-    url = f"{worker_url}/api/jobs"
-    if status_filter:
-        url += f"?status={status_filter}"
-    resp = requests.get(url, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
+def _queue_list_fallback(
+    status_filter: str | None,
+    include_args: bool,
+    queue_config_path: str | None,
+) -> dict:
+    """Read job list directly from SQLite when the worker is unreachable."""
+    db_path = _resolve_db_path(queue_config_path)
+    if db_path is None:
+        return {"total": 0, "jobs": [], "_fallback": True,
+                "error": "Worker unreachable and jobs.db not found"}
+
+    from job_queue.db import JobStore
+    store = JobStore(db_path)
+    try:
+        jobs = store.get_all_jobs(status=status_filter)
+        job_list = []
+        for j in jobs:
+            entry = {
+                "job_id": j["id"],
+                "endpoint": j["endpoint"],
+                "submit_tool": j["submit_tool"],
+                "status": j["status"],
+                "created_at": j["created_at"],
+                "updated_at": j["updated_at"],
+                "error": j["error"],
+            }
+            if include_args:
+                try:
+                    entry["args"] = json.loads(j["args"])
+                except (json.JSONDecodeError, TypeError):
+                    entry["args"] = j["args"]
+            job_list.append(entry)
+        return {"total": len(job_list), "jobs": job_list, "_fallback": True}
+    finally:
+        store.close()
 
 
-def _queue_stats(worker_url: str) -> dict:
-    """Get per-endpoint statistics from the queue worker."""
-    resp = requests.get(f"{worker_url}/api/stats", timeout=10)
-    resp.raise_for_status()
-    return resp.json()
+def _queue_stats_fallback(queue_config_path: str | None) -> dict:
+    """Read per-endpoint stats directly from SQLite when the worker is unreachable."""
+    db_path = _resolve_db_path(queue_config_path)
+    if db_path is None:
+        return {"endpoints": [], "_fallback": True,
+                "error": "Worker unreachable and jobs.db not found"}
+
+    from job_queue.db import JobStore
+    store = JobStore(db_path)
+    try:
+        stats = store.get_stats_by_endpoint()
+        return {"endpoints": stats, "_fallback": True}
+    finally:
+        store.close()
+
+
+def _queue_wait_fallback(
+    job_id: str,
+    include_args: bool,
+    queue_config_path: str | None,
+) -> dict:
+    """Read a single job directly from SQLite when the worker is unreachable."""
+    db_path = _resolve_db_path(queue_config_path)
+    if db_path is None:
+        return {"error": "Worker unreachable and jobs.db not found",
+                "_fallback": True}
+
+    from job_queue.db import JobStore
+    store = JobStore(db_path)
+    try:
+        job = store.get_job(job_id)
+        if job is None:
+            return {"error": "Job not found", "_fallback": True}
+        resp = {
+            "job_id": job["id"],
+            "status": job["status"],
+            "result": job["result"],
+            "error": job["error"],
+            "remote_job_id": job["remote_job_id"],
+            "_fallback": True,
+        }
+        if include_args:
+            try:
+                resp["args"] = json.loads(job["args"])
+            except (json.JSONDecodeError, TypeError):
+                resp["args"] = job["args"]
+        return resp
+    finally:
+        store.close()
+
+
+def _queue_wait(
+    worker_url: str,
+    job_id: str,
+    include_args: bool = False,
+    queue_config_path: str | None = None,
+) -> dict:
+    """Query a job's status from the queue, with SQLite fallback."""
+    try:
+        url = f"{worker_url}/api/jobs/{job_id}"
+        if include_args:
+            url += "?include_args=true"
+        resp = requests.get(url, timeout=10)
+        return resp.json()
+    except (requests.ConnectionError, requests.Timeout):
+        return _queue_wait_fallback(job_id, include_args, queue_config_path)
+
+
+def _queue_list(
+    worker_url: str,
+    status_filter: str | None = None,
+    include_args: bool = False,
+    queue_config_path: str | None = None,
+) -> dict:
+    """List all jobs from the queue worker, with SQLite fallback."""
+    try:
+        url = f"{worker_url}/api/jobs"
+        params = {}
+        if status_filter:
+            params["status"] = status_filter
+        if include_args:
+            params["include_args"] = "true"
+        if params:
+            url += "?" + "&".join(f"{k}={v}" for k, v in params.items())
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.ConnectionError, requests.Timeout):
+        return _queue_list_fallback(status_filter, include_args, queue_config_path)
+
+
+def _queue_stats(
+    worker_url: str,
+    queue_config_path: str | None = None,
+) -> dict:
+    """Get per-endpoint statistics from the queue worker, with SQLite fallback."""
+    try:
+        resp = requests.get(f"{worker_url}/api/stats", timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.ConnectionError, requests.Timeout):
+        return _queue_stats_fallback(queue_config_path)
 
 
 def _queue_blocking(
@@ -901,6 +1041,7 @@ def route_execution(
     list_jobs: bool = False,
     show_stats: bool = False,
     filter_status: str | None = None,
+    show_args: bool = False,
     endpoint: str | None = None,
     submit_tool: str | None = None,
     submit_args: dict | None = None,
@@ -919,9 +1060,13 @@ def route_execution(
     submit_args = submit_args or {}
     headers = headers or {}
 
-    # Auto-start worker daemon if any queue mode is active
+    # Read-only operations (--list / --stats / --wait) do NOT auto-start
+    # the worker; they fall back to SQLite when the worker is unreachable.
+    is_read_only = bool(list_jobs or show_stats or wait_job_id)
+
+    # Auto-start worker daemon only for write operations
     needs_worker = bool(
-        worker_url or queue_config_path or list_jobs or show_stats or wait_job_id
+        (worker_url or queue_config_path) and not is_read_only
     )
     if needs_worker:
         resolved_url = (
@@ -934,17 +1079,20 @@ def route_execution(
     # --list mode
     if list_jobs:
         url = worker_url or resolve_worker_url(None, queue_config_path) or "http://127.0.0.1:54321"
-        return _queue_list(url, status_filter=filter_status)
+        return _queue_list(url, status_filter=filter_status,
+                           include_args=show_args,
+                           queue_config_path=queue_config_path)
 
     # --stats mode
     if show_stats:
         url = worker_url or resolve_worker_url(None, queue_config_path) or "http://127.0.0.1:54321"
-        return _queue_stats(url)
+        return _queue_stats(url, queue_config_path=queue_config_path)
 
     # --wait mode
     if wait_job_id:
         url = worker_url or resolve_worker_url(None, queue_config_path) or "http://127.0.0.1:54321"
-        return _queue_wait(url, wait_job_id)
+        return _queue_wait(url, wait_job_id, include_args=show_args,
+                           queue_config_path=queue_config_path)
 
     # Queue mode (--queue-config or --worker-url provided)
     if worker_url or queue_config_path:
@@ -1050,6 +1198,8 @@ Examples:
     queue_group.add_argument("--list", action="store_true", help="List all jobs in the queue")
     queue_group.add_argument("--stats", action="store_true", help="Show per-endpoint statistics")
     queue_group.add_argument("--filter-status", help="Filter jobs by status (used with --list)")
+    queue_group.add_argument("--show-args", action="store_true",
+                             help="Include original submit args in --list / --wait responses")
 
     return parser
 
@@ -1058,27 +1208,28 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    # --list mode needs minimal args
+    # --list mode needs minimal args (no worker auto-start; falls back to SQLite)
     if args.list:
         worker_url = resolve_worker_url(args.worker_url, args.queue_config) or "http://127.0.0.1:54321"
-        _ensure_worker_running(worker_url, args.queue_config)
-        result = _queue_list(worker_url, status_filter=args.filter_status)
+        result = _queue_list(worker_url, status_filter=args.filter_status,
+                             include_args=args.show_args,
+                             queue_config_path=args.queue_config)
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return
 
-    # --stats mode needs minimal args
+    # --stats mode needs minimal args (no worker auto-start; falls back to SQLite)
     if args.stats:
         worker_url = resolve_worker_url(args.worker_url, args.queue_config) or "http://127.0.0.1:54321"
-        _ensure_worker_running(worker_url, args.queue_config)
-        result = _queue_stats(worker_url)
+        result = _queue_stats(worker_url, queue_config_path=args.queue_config)
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return
 
-    # --wait mode needs minimal args
+    # --wait mode needs minimal args (no worker auto-start; falls back to SQLite)
     if args.wait:
         worker_url = resolve_worker_url(args.worker_url, args.queue_config) or "http://127.0.0.1:54321"
-        _ensure_worker_running(worker_url, args.queue_config)
-        result = _queue_wait(worker_url, args.wait)
+        result = _queue_wait(worker_url, args.wait,
+                             include_args=args.show_args,
+                             queue_config_path=args.queue_config)
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return
 
@@ -1131,6 +1282,7 @@ def main():
         queue_config_path=args.queue_config,
         submit_only=args.submit_only,
         wait_job_id=None,
+        show_args=args.show_args,
         endpoint=endpoint,
         submit_tool=args.submit_tool,
         submit_args=submit_args,
