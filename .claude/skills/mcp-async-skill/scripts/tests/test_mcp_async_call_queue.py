@@ -522,6 +522,433 @@ class TestRateLimitsPassthrough(unittest.TestCase):
         self.assertIn("job_id", result)
 
 
+# ── 5-6. SQLite Fallback Tests ────────────────────────────────────────
+
+class TestSqliteFallbackList(unittest.TestCase):
+    """_queue_list falls back to SQLite when the worker is unreachable."""
+
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp()
+        # Create a .claude/queue/ structure with a real jobs.db
+        self.queue_dir = os.path.join(self.tmpdir, ".claude", "queue")
+        os.makedirs(self.queue_dir)
+        self.db_path = os.path.join(self.queue_dir, "jobs.db")
+
+        from job_queue.db import JobStore
+        store = JobStore(self.db_path)
+        store.insert_job(
+            endpoint="http://mcp:8000",
+            submit_tool="gen",
+            args='{"prompt":"hello"}',
+            status_tool="status",
+            result_tool="result",
+        )
+        store.close()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_fallback_returns_jobs(self):
+        from mcp_async_call import _queue_list
+        with mock.patch("mcp_async_call.requests.get", side_effect=requests.ConnectionError("refused")):
+            with mock.patch("mcp_async_call._resolve_db_path", return_value=self.db_path):
+                result = _queue_list("http://127.0.0.1:54321",
+                                     queue_config_path=None)
+        self.assertIn("jobs", result)
+        self.assertEqual(result["total"], 1)
+        self.assertTrue(result.get("_fallback"))
+        self.assertNotIn("args", result["jobs"][0])
+
+    def test_fallback_with_include_args(self):
+        from mcp_async_call import _queue_list
+        with mock.patch("mcp_async_call.requests.get", side_effect=requests.ConnectionError("refused")):
+            with mock.patch("mcp_async_call._resolve_db_path", return_value=self.db_path):
+                result = _queue_list("http://127.0.0.1:54321",
+                                     include_args=True,
+                                     queue_config_path=None)
+        self.assertIn("args", result["jobs"][0])
+        self.assertEqual(result["jobs"][0]["args"]["prompt"], "hello")
+
+    def test_fallback_with_status_filter(self):
+        from mcp_async_call import _queue_list
+        with mock.patch("mcp_async_call.requests.get", side_effect=requests.ConnectionError("refused")):
+            with mock.patch("mcp_async_call._resolve_db_path", return_value=self.db_path):
+                result = _queue_list("http://127.0.0.1:54321",
+                                     status_filter="completed",
+                                     queue_config_path=None)
+        # No completed jobs, so list should be empty
+        self.assertEqual(result["total"], 0)
+
+
+class TestSqliteFallbackStats(unittest.TestCase):
+    """_queue_stats falls back to SQLite when the worker is unreachable."""
+
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp()
+        self.queue_dir = os.path.join(self.tmpdir, ".claude", "queue")
+        os.makedirs(self.queue_dir)
+        self.db_path = os.path.join(self.queue_dir, "jobs.db")
+
+        from job_queue.db import JobStore
+        store = JobStore(self.db_path)
+        store.insert_job(
+            endpoint="http://mcp:8000",
+            submit_tool="gen",
+            args='{"prompt":"hello"}',
+        )
+        store.close()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_fallback_returns_stats(self):
+        from mcp_async_call import _queue_stats
+        with mock.patch("mcp_async_call.requests.get", side_effect=requests.ConnectionError("refused")):
+            with mock.patch("mcp_async_call._resolve_db_path", return_value=self.db_path):
+                result = _queue_stats("http://127.0.0.1:54321",
+                                      queue_config_path=None)
+        self.assertIn("endpoints", result)
+        self.assertTrue(result.get("_fallback"))
+        self.assertGreaterEqual(len(result["endpoints"]), 1)
+        self.assertEqual(result["endpoints"][0]["endpoint"], "http://mcp:8000")
+
+
+class TestSqliteFallbackWait(unittest.TestCase):
+    """_queue_wait falls back to SQLite when the worker is unreachable."""
+
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp()
+        self.queue_dir = os.path.join(self.tmpdir, ".claude", "queue")
+        os.makedirs(self.queue_dir)
+        self.db_path = os.path.join(self.queue_dir, "jobs.db")
+
+        from job_queue.db import JobStore
+        store = JobStore(self.db_path)
+        self.job_id = store.insert_job(
+            endpoint="http://mcp:8000",
+            submit_tool="gen",
+            args='{"prompt":"test_wait"}',
+        )
+        store.close()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_fallback_returns_job(self):
+        from mcp_async_call import _queue_wait
+        with mock.patch("mcp_async_call.requests.get", side_effect=requests.ConnectionError("refused")):
+            with mock.patch("mcp_async_call._resolve_db_path", return_value=self.db_path):
+                result = _queue_wait("http://127.0.0.1:54321",
+                                     self.job_id,
+                                     queue_config_path=None)
+        self.assertEqual(result["job_id"], self.job_id)
+        self.assertEqual(result["status"], "pending")
+        self.assertTrue(result.get("_fallback"))
+
+    def test_fallback_with_include_args(self):
+        from mcp_async_call import _queue_wait
+        with mock.patch("mcp_async_call.requests.get", side_effect=requests.ConnectionError("refused")):
+            with mock.patch("mcp_async_call._resolve_db_path", return_value=self.db_path):
+                result = _queue_wait("http://127.0.0.1:54321",
+                                     self.job_id,
+                                     include_args=True,
+                                     queue_config_path=None)
+        self.assertIn("args", result)
+        self.assertEqual(result["args"]["prompt"], "test_wait")
+
+    def test_fallback_nonexistent_job(self):
+        from mcp_async_call import _queue_wait
+        with mock.patch("mcp_async_call.requests.get", side_effect=requests.ConnectionError("refused")):
+            with mock.patch("mcp_async_call._resolve_db_path", return_value=self.db_path):
+                result = _queue_wait("http://127.0.0.1:54321",
+                                     "nonexistent-id",
+                                     queue_config_path=None)
+        self.assertIn("error", result)
+        self.assertEqual(result["error"], "Job not found")
+
+
+class TestSqliteFallbackNoDb(unittest.TestCase):
+    """Fallback when jobs.db does not exist."""
+
+    def test_list_fallback_no_db(self):
+        from mcp_async_call import _queue_list
+        with mock.patch("mcp_async_call.requests.get", side_effect=requests.ConnectionError("refused")):
+            with mock.patch("mcp_async_call._resolve_db_path", return_value=None):
+                result = _queue_list("http://127.0.0.1:54321",
+                                     queue_config_path=None)
+        self.assertEqual(result["total"], 0)
+        self.assertIn("error", result)
+
+    def test_stats_fallback_no_db(self):
+        from mcp_async_call import _queue_stats
+        with mock.patch("mcp_async_call.requests.get", side_effect=requests.ConnectionError("refused")):
+            with mock.patch("mcp_async_call._resolve_db_path", return_value=None):
+                result = _queue_stats("http://127.0.0.1:54321",
+                                      queue_config_path=None)
+        self.assertEqual(result["endpoints"], [])
+        self.assertIn("error", result)
+
+    def test_wait_fallback_no_db(self):
+        from mcp_async_call import _queue_wait
+        with mock.patch("mcp_async_call.requests.get", side_effect=requests.ConnectionError("refused")):
+            with mock.patch("mcp_async_call._resolve_db_path", return_value=None):
+                result = _queue_wait("http://127.0.0.1:54321",
+                                     "some-id",
+                                     queue_config_path=None)
+        self.assertIn("error", result)
+
+
+# ── 5-7. --show-args CLI Parsing ─────────────────────────────────────
+
+class TestShowArgsFlag(unittest.TestCase):
+    """--show-args flag is accepted and wired to route_execution."""
+
+    def _parse(self, args_list: list[str]):
+        from mcp_async_call import build_parser
+        return build_parser().parse_args(args_list)
+
+    def test_show_args_default_false(self):
+        args = self._parse(["--list", "--queue-config", "q.json"])
+        self.assertFalse(args.show_args)
+
+    def test_show_args_true(self):
+        args = self._parse(["--list", "--queue-config", "q.json", "--show-args"])
+        self.assertTrue(args.show_args)
+
+    def test_show_args_with_wait(self):
+        args = self._parse(["--wait", "abc", "--show-args"])
+        self.assertTrue(args.show_args)
+
+    def test_route_list_passes_show_args(self):
+        from mcp_async_call import route_execution
+        with mock.patch("mcp_async_call._queue_list") as m:
+            m.return_value = {"total": 0, "jobs": []}
+            route_execution(
+                worker_url="http://127.0.0.1:54321",
+                queue_config_path="q.json",
+                submit_only=False,
+                wait_job_id=None,
+                list_jobs=True,
+                show_args=True,
+                endpoint=None,
+                submit_tool=None,
+                submit_args={},
+                status_tool=None,
+                result_tool=None,
+                headers={},
+                output_dir="./output",
+                output_file=None,
+                auto_filename=False,
+                poll_interval=2.0,
+                max_polls=300,
+                save_logs_to_dir=False,
+                save_logs_inline=False,
+            )
+            # Verify include_args=True was passed
+            call_kwargs = m.call_args
+            self.assertTrue(call_kwargs[1].get("include_args") or
+                            (len(call_kwargs[0]) > 2 and call_kwargs[0][2]))
+
+    def test_route_wait_passes_show_args(self):
+        from mcp_async_call import route_execution
+        with mock.patch("mcp_async_call._queue_wait") as m:
+            m.return_value = {"job_id": "abc", "status": "completed"}
+            route_execution(
+                worker_url="http://127.0.0.1:54321",
+                queue_config_path="q.json",
+                submit_only=False,
+                wait_job_id="abc",
+                show_args=True,
+                endpoint=None,
+                submit_tool=None,
+                submit_args={},
+                status_tool=None,
+                result_tool=None,
+                headers={},
+                output_dir="./output",
+                output_file=None,
+                auto_filename=False,
+                poll_interval=2.0,
+                max_polls=300,
+                save_logs_to_dir=False,
+                save_logs_inline=False,
+            )
+            call_kwargs = m.call_args
+            self.assertTrue(call_kwargs[1].get("include_args") or
+                            (len(call_kwargs[0]) > 2 and call_kwargs[0][2]))
+
+
+# ── 5-8. Read-only operations do NOT auto-start worker ───────────────
+
+class TestReadOnlyNoAutoStart(unittest.TestCase):
+    """--list/--stats/--wait should NOT call _ensure_worker_running."""
+
+    def test_list_no_autostart(self):
+        from mcp_async_call import route_execution
+        with mock.patch("mcp_async_call._queue_list") as m_list, \
+             mock.patch("mcp_async_call._ensure_worker_running") as m_ensure:
+            m_list.return_value = {"total": 0, "jobs": []}
+            route_execution(
+                worker_url="http://127.0.0.1:54321",
+                queue_config_path="q.json",
+                submit_only=False,
+                wait_job_id=None,
+                list_jobs=True,
+                endpoint=None,
+                submit_tool=None,
+                submit_args={},
+                status_tool=None,
+                result_tool=None,
+                headers={},
+                output_dir="./output",
+                output_file=None,
+                auto_filename=False,
+                poll_interval=2.0,
+                max_polls=300,
+                save_logs_to_dir=False,
+                save_logs_inline=False,
+            )
+            m_ensure.assert_not_called()
+
+    def test_stats_no_autostart(self):
+        from mcp_async_call import route_execution
+        with mock.patch("mcp_async_call._queue_stats") as m_stats, \
+             mock.patch("mcp_async_call._ensure_worker_running") as m_ensure:
+            m_stats.return_value = {"endpoints": []}
+            route_execution(
+                worker_url="http://127.0.0.1:54321",
+                queue_config_path="q.json",
+                submit_only=False,
+                wait_job_id=None,
+                show_stats=True,
+                endpoint=None,
+                submit_tool=None,
+                submit_args={},
+                status_tool=None,
+                result_tool=None,
+                headers={},
+                output_dir="./output",
+                output_file=None,
+                auto_filename=False,
+                poll_interval=2.0,
+                max_polls=300,
+                save_logs_to_dir=False,
+                save_logs_inline=False,
+            )
+            m_ensure.assert_not_called()
+
+    def test_wait_no_autostart(self):
+        from mcp_async_call import route_execution
+        with mock.patch("mcp_async_call._queue_wait") as m_wait, \
+             mock.patch("mcp_async_call._ensure_worker_running") as m_ensure:
+            m_wait.return_value = {"job_id": "abc", "status": "pending"}
+            route_execution(
+                worker_url="http://127.0.0.1:54321",
+                queue_config_path="q.json",
+                submit_only=False,
+                wait_job_id="abc",
+                endpoint=None,
+                submit_tool=None,
+                submit_args={},
+                status_tool=None,
+                result_tool=None,
+                headers={},
+                output_dir="./output",
+                output_file=None,
+                auto_filename=False,
+                poll_interval=2.0,
+                max_polls=300,
+                save_logs_to_dir=False,
+                save_logs_inline=False,
+            )
+            m_ensure.assert_not_called()
+
+
+# ── 5-9. E2E: --show-args with live worker ──────────────────────────
+
+class TestE2EShowArgs(unittest.TestCase):
+    """E2E test for include_args with a running worker."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.port = get_free_port()
+        cls.worker_url = f"http://127.0.0.1:{cls.port}"
+
+        def mock_executor(job):
+            cls.worker_app.store.update_status(
+                job["id"], "completed",
+                result=json.dumps({"urls": ["https://example.com/img.png"]}),
+            )
+
+        cls.worker_app = worker.WorkerApp(
+            host="127.0.0.1",
+            port=cls.port,
+            db_path=":memory:",
+            config_dict={
+                "default_rate_limit": {
+                    "max_concurrent_jobs": 5,
+                    "min_interval_seconds": 0.0,
+                },
+            },
+            job_executor=mock_executor,
+            idle_timeout=0,
+        )
+        cls.worker_app.start()
+        for _ in range(50):
+            try:
+                requests.get(f"{cls.worker_url}/api/health", timeout=0.5)
+                break
+            except requests.ConnectionError:
+                time.sleep(0.05)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.worker_app.stop()
+
+    def test_e2e_list_with_show_args(self):
+        from mcp_async_call import _queue_submit_only, _queue_list
+        _queue_submit_only(
+            worker_url=self.worker_url,
+            endpoint="http://mcp:8000/sse",
+            submit_tool="gen",
+            submit_args={"prompt": "e2e_args_test"},
+            status_tool=None,
+            result_tool=None,
+            headers=None,
+        )
+        time.sleep(0.5)
+        result = _queue_list(self.worker_url, include_args=True)
+        self.assertGreaterEqual(result["total"], 1)
+        found = any(
+            j.get("args", {}).get("prompt") == "e2e_args_test"
+            for j in result["jobs"]
+        )
+        self.assertTrue(found)
+
+    def test_e2e_wait_with_show_args(self):
+        from mcp_async_call import _queue_submit_only, _queue_wait
+        submit_result = _queue_submit_only(
+            worker_url=self.worker_url,
+            endpoint="http://mcp:8000/sse",
+            submit_tool="gen",
+            submit_args={"prompt": "e2e_wait_args"},
+            status_tool=None,
+            result_tool=None,
+            headers=None,
+        )
+        job_id = submit_result["job_id"]
+        time.sleep(0.5)
+        result = _queue_wait(self.worker_url, job_id, include_args=True)
+        self.assertIn("args", result)
+        self.assertEqual(result["args"]["prompt"], "e2e_wait_args")
+
+
 class TestFindProjectRoot(unittest.TestCase):
     """Verify find_project_root() traverses upward to find .claude/ dir."""
 
