@@ -460,5 +460,99 @@ class TestE2EListStats(unittest.TestCase):
         self.assertGreaterEqual(result["total"], 1)
 
 
+class TestRateLimitsPassthrough(unittest.TestCase):
+    """Verify rate_limits are passed through submit_job to the POST body."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.port = get_free_port()
+        cls.worker_url = f"http://127.0.0.1:{cls.port}"
+        cls.worker_app = worker.WorkerApp(
+            host="127.0.0.1",
+            port=cls.port,
+            db_path=":memory:",
+            config_dict={
+                "default_rate_limit": {
+                    "max_concurrent_jobs": 5,
+                    "min_interval_seconds": 0.0,
+                },
+            },
+            job_executor=lambda job: None,
+            idle_timeout=0,
+        )
+        cls.worker_app.start()
+        for _ in range(50):
+            try:
+                requests.get(f"{cls.worker_url}/api/health", timeout=0.5)
+                break
+            except requests.ConnectionError:
+                time.sleep(0.05)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.worker_app.stop()
+
+    def test_submit_with_rate_limits(self):
+        """submit_job with rate_limits should register them in dispatcher."""
+        from job_queue.client import submit_job
+        result = submit_job(
+            worker_url=self.worker_url,
+            endpoint="http://rate-test:8000",
+            submit_tool="gen",
+            args={"prompt": "test"},
+            rate_limits={"max_concurrent_jobs": 1, "min_interval_seconds": 5.0},
+        )
+        self.assertIn("job_id", result)
+        # Check that limits were registered
+        max_c, min_i = self.worker_app.dispatcher.config.get_limits(
+            "http://rate-test:8000"
+        )
+        self.assertEqual(max_c, 1)
+        self.assertEqual(min_i, 5.0)
+
+    def test_submit_without_rate_limits_backward_compat(self):
+        """submit_job without rate_limits should work as before."""
+        from job_queue.client import submit_job
+        result = submit_job(
+            worker_url=self.worker_url,
+            endpoint="http://no-limits:8000",
+            submit_tool="gen",
+            args={"prompt": "test"},
+        )
+        self.assertIn("job_id", result)
+
+
+class TestFindProjectRoot(unittest.TestCase):
+    """Verify find_project_root() traverses upward to find .claude/ dir."""
+
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_finds_claude_dir(self):
+        from mcp_worker_daemon import find_project_root
+        # Create .claude/ at tmpdir level
+        os.makedirs(os.path.join(self.tmpdir, ".claude"))
+        deep = os.path.join(self.tmpdir, "a", "b", "c")
+        os.makedirs(deep)
+        result = find_project_root(os.path.join(deep, "dummy.py"))
+        self.assertEqual(os.path.normpath(result), os.path.normpath(self.tmpdir))
+
+    def test_finds_closest_claude_dir(self):
+        from mcp_worker_daemon import find_project_root
+        # Create .claude/ at two levels; should find closest one
+        os.makedirs(os.path.join(self.tmpdir, ".claude"))
+        nested = os.path.join(self.tmpdir, "sub")
+        os.makedirs(os.path.join(nested, ".claude"))
+        deep = os.path.join(nested, "a", "b")
+        os.makedirs(deep)
+        result = find_project_root(os.path.join(deep, "dummy.py"))
+        self.assertEqual(os.path.normpath(result), os.path.normpath(nested))
+
+
 if __name__ == "__main__":
     unittest.main()

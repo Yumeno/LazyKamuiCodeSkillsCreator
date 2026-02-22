@@ -344,6 +344,183 @@ class TestGetStatsByEndpoint(unittest.TestCase):
         self.assertEqual(stats, [])
 
 
+class TestGetStaleJobs(unittest.TestCase):
+    """Querying stale (zombie) jobs for recovery on startup."""
+
+    def setUp(self):
+        self.store = db.JobStore(":memory:")
+
+    def test_returns_running_jobs(self):
+        jid = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        self.store.update_status(jid, "running")
+        stale = self.store.get_stale_jobs(["running", "polling"])
+        self.assertEqual(len(stale), 1)
+        self.assertEqual(stale[0]["id"], jid)
+
+    def test_returns_polling_jobs(self):
+        jid = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        self.store.update_status(jid, "polling", session_id="s1", remote_job_id="r1")
+        stale = self.store.get_stale_jobs(["running", "polling"])
+        self.assertEqual(len(stale), 1)
+        self.assertEqual(stale[0]["session_id"], "s1")
+        self.assertEqual(stale[0]["remote_job_id"], "r1")
+
+    def test_excludes_pending_and_completed(self):
+        jid1 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        jid2 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        self.store.update_status(jid2, "completed", result="{}")
+        stale = self.store.get_stale_jobs(["running", "polling"])
+        self.assertEqual(len(stale), 0)
+
+    def test_empty_db(self):
+        stale = self.store.get_stale_jobs(["running", "polling"])
+        self.assertEqual(stale, [])
+
+    def test_ordered_by_created_at_asc(self):
+        jid1 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args='{"i":1}')
+        jid2 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args='{"i":2}')
+        self.store.update_status(jid1, "running")
+        self.store.update_status(jid2, "running")
+        stale = self.store.get_stale_jobs(["running"])
+        self.assertEqual(stale[0]["id"], jid1)
+        self.assertEqual(stale[1]["id"], jid2)
+
+    def test_single_status_filter(self):
+        jid1 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        jid2 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        self.store.update_status(jid1, "running")
+        self.store.update_status(jid2, "polling")
+        stale = self.store.get_stale_jobs(["running"])
+        self.assertEqual(len(stale), 1)
+        self.assertEqual(stale[0]["id"], jid1)
+
+
+class TestPurgeOldJobs(unittest.TestCase):
+    """Purging old completed/failed jobs on startup."""
+
+    def setUp(self):
+        self.store = db.JobStore(":memory:")
+
+    def test_purge_with_zero_retention_deletes_completed(self):
+        jid = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        self.store.update_status(jid, "completed", result="{}")
+        count = self.store.purge_old_jobs(retention_seconds=0)
+        self.assertEqual(count, 1)
+        self.assertIsNone(self.store.get_job(jid))
+
+    def test_purge_with_zero_retention_deletes_failed(self):
+        jid = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        self.store.update_status(jid, "failed", error="test error")
+        count = self.store.purge_old_jobs(retention_seconds=0)
+        self.assertEqual(count, 1)
+        self.assertIsNone(self.store.get_job(jid))
+
+    def test_purge_keeps_recent_jobs(self):
+        jid = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        self.store.update_status(jid, "completed", result="{}")
+        count = self.store.purge_old_jobs(retention_seconds=9999)
+        self.assertEqual(count, 0)
+        self.assertIsNotNone(self.store.get_job(jid))
+
+    def test_purge_does_not_touch_pending(self):
+        jid = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        count = self.store.purge_old_jobs(retention_seconds=0)
+        self.assertEqual(count, 0)
+        self.assertIsNotNone(self.store.get_job(jid))
+
+    def test_purge_does_not_touch_running(self):
+        jid = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        self.store.update_status(jid, "running")
+        count = self.store.purge_old_jobs(retention_seconds=0)
+        self.assertEqual(count, 0)
+        self.assertIsNotNone(self.store.get_job(jid))
+
+    def test_purge_does_not_touch_polling(self):
+        jid = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        self.store.update_status(jid, "polling")
+        count = self.store.purge_old_jobs(retention_seconds=0)
+        self.assertEqual(count, 0)
+
+    def test_purge_empty_db(self):
+        count = self.store.purge_old_jobs(retention_seconds=0)
+        self.assertEqual(count, 0)
+
+    def test_purge_mixed_statuses(self):
+        jid1 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        jid2 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        jid3 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        jid4 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        self.store.update_status(jid1, "completed", result="{}")
+        self.store.update_status(jid2, "failed", error="err")
+        self.store.update_status(jid3, "running")
+        # jid4 stays pending
+        count = self.store.purge_old_jobs(retention_seconds=0)
+        self.assertEqual(count, 2)  # only completed and failed
+        self.assertIsNone(self.store.get_job(jid1))
+        self.assertIsNone(self.store.get_job(jid2))
+        self.assertIsNotNone(self.store.get_job(jid3))
+        self.assertIsNotNone(self.store.get_job(jid4))
+
+
+class TestRecoveringEndpoints(unittest.TestCase):
+    """Querying recovering jobs for the dispatcher."""
+
+    def setUp(self):
+        self.store = db.JobStore(":memory:")
+
+    def test_get_recovering_endpoints_empty(self):
+        endpoints = self.store.get_recovering_endpoints()
+        self.assertEqual(endpoints, [])
+
+    def test_get_recovering_endpoints_returns_unique(self):
+        jid1 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        jid2 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        jid3 = self.store.insert_job(endpoint="http://b:8001", submit_tool="g", args="{}")
+        self.store.update_status(jid1, "recovering")
+        self.store.update_status(jid2, "recovering")
+        self.store.update_status(jid3, "recovering")
+        endpoints = self.store.get_recovering_endpoints()
+        self.assertEqual(sorted(endpoints), ["http://a:8000", "http://b:8001"])
+
+    def test_get_recovering_endpoints_excludes_other_statuses(self):
+        jid1 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        jid2 = self.store.insert_job(endpoint="http://b:8001", submit_tool="g", args="{}")
+        self.store.update_status(jid1, "pending")
+        self.store.update_status(jid2, "running")
+        endpoints = self.store.get_recovering_endpoints()
+        self.assertEqual(endpoints, [])
+
+    def test_get_oldest_recovering(self):
+        jid1 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args='{"i":1}')
+        jid2 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args='{"i":2}')
+        self.store.update_status(jid1, "recovering")
+        self.store.update_status(jid2, "recovering")
+        oldest = self.store.get_oldest_recovering("http://a:8000")
+        self.assertIsNotNone(oldest)
+        self.assertEqual(oldest["id"], jid1)
+
+    def test_get_oldest_recovering_none_for_other_endpoint(self):
+        jid = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        self.store.update_status(jid, "recovering")
+        result = self.store.get_oldest_recovering("http://b:8001")
+        self.assertIsNone(result)
+
+    def test_get_oldest_recovering_empty(self):
+        result = self.store.get_oldest_recovering("http://a:8000")
+        self.assertIsNone(result)
+
+    def test_count_active_excludes_recovering(self):
+        """recovering should NOT be counted as active (running+polling)."""
+        jid1 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        jid2 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        jid3 = self.store.insert_job(endpoint="http://a:8000", submit_tool="g", args="{}")
+        self.store.update_status(jid1, "running")
+        self.store.update_status(jid2, "recovering")
+        self.store.update_status(jid3, "polling")
+        self.assertEqual(self.store.count_active_jobs("http://a:8000"), 2)  # running + polling only
+        self.assertEqual(self.store.count_all_active_jobs(), 2)
+
+
 class TestClose(unittest.TestCase):
     """Connection lifecycle."""
 
