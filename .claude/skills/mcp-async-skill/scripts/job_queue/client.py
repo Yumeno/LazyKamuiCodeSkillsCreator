@@ -69,6 +69,7 @@ def submit_job(
     status_tool: str | None = None,
     result_tool: str | None = None,
     headers: dict | None = None,
+    rate_limits: dict | None = None,
 ) -> dict:
     """Submit a job to the worker. Returns {"job_id": ..., "status": "pending"}."""
     payload = {
@@ -82,6 +83,8 @@ def submit_job(
         payload["result_tool"] = result_tool
     if headers:
         payload["headers"] = headers
+    if rate_limits:
+        payload["rate_limits"] = rate_limits
 
     resp = requests.post(f"{worker_url}/api/jobs", json=payload, timeout=10)
     resp.raise_for_status()
@@ -102,6 +105,7 @@ def blocking_job(
     status_tool: str | None = None,
     result_tool: str | None = None,
     headers: dict | None = None,
+    rate_limits: dict | None = None,
     poll_interval: float = 2.0,
     max_polls: int = 300,
 ) -> dict:
@@ -117,6 +121,7 @@ def blocking_job(
         status_tool=status_tool,
         result_tool=result_tool,
         headers=headers,
+        rate_limits=rate_limits,
     )
     job_id = submit_result["job_id"]
 

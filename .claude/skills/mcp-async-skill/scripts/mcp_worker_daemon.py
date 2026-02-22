@@ -27,6 +27,26 @@ from job_queue.dispatcher import QueueConfig
 from job_queue.worker import WorkerApp
 
 
+def find_project_root(start_path):
+    """Find the project root by traversing upward looking for .claude/ directory.
+
+    Args:
+        start_path: File or directory path to start searching from.
+
+    Returns:
+        Path to the project root (directory containing .claude/).
+        Falls back to the parent directory of start_path if not found.
+    """
+    current = os.path.dirname(os.path.abspath(start_path))
+    while True:
+        if os.path.isdir(os.path.join(current, ".claude")):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return os.path.dirname(os.path.abspath(start_path))
+        current = parent
+
+
 def _is_retryable(exc, connection_error_cls=None, http_error_cls=None):
     """Return True if the exception is a retryable transient error.
 
@@ -319,15 +339,21 @@ def main():
     if args.host:
         config.host = args.host
 
-    # Determine DB path (same directory as config, or current dir)
-    if args.config:
-        db_dir = os.path.dirname(os.path.abspath(args.config))
-    else:
-        db_dir = os.getcwd()
-    db_path = os.path.join(db_dir, "jobs.db")
+    # Determine project root and queue directory
+    project_root = find_project_root(args.config or os.getcwd())
+    queue_dir = os.path.join(project_root, ".claude", "queue")
+    os.makedirs(queue_dir, exist_ok=True)
+    db_path = os.path.join(queue_dir, "jobs.db")
 
-    # Create executor
-    executor = create_mcp_job_executor()
+    # Determine results directory
+    results_dir = config_dict.get("results_dir") or os.path.join(queue_dir, "results")
+    os.makedirs(results_dir, exist_ok=True)
+
+    # Retention period for old jobs
+    retention_seconds = config_dict.get("job_retention_seconds", 86400.0)
+
+    # Create executor with results_dir
+    executor = create_mcp_job_executor(results_dir=results_dir)
 
     # Create and start worker
     app = WorkerApp(
@@ -337,6 +363,7 @@ def main():
         config_dict=config_dict,
         job_executor=executor,
         idle_timeout=config.idle_timeout,
+        results_dir=results_dir,
     )
 
     # Inject store reference into executor
@@ -344,10 +371,14 @@ def main():
 
     print(f"[WORKER] Starting on {config.host}:{config.port}")
     print(f"[WORKER] DB: {db_path}")
+    print(f"[WORKER] Results: {results_dir}")
     print(f"[WORKER] Idle timeout: {config.idle_timeout}s")
 
     try:
-        app.start()
+        app.start(
+            rollback_fn=create_rollback_fn(),
+            retention_seconds=retention_seconds,
+        )
         # Keep main thread alive
         while app._running:
             time.sleep(1)
