@@ -13,17 +13,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#lazy-v}" >> $GITHUB_OUTPUT
-
-      - name: Sync scripts to release directory
+      - name: Build tar.gz
         run: |
           SRC=.claude/skills/mcp-async-skill
-          DST=release/claude/lazykamui/.claude/skills/mcp-async-skill
+          STAGING=$(mktemp -d)
+          DST=$STAGING/mcp-async-skill
 
-          # Clean and recreate
-          rm -rf $DST/scripts $DST/SKILL.md
           mkdir -p $DST/scripts/job_queue
 
           # Copy scripts (no tests, no __pycache__)
@@ -39,23 +34,31 @@ jobs:
           # Copy SKILL.md
           cp $SRC/SKILL.md $DST/
 
-      - name: Update version in pyproject.toml and __init__.py
-        run: |
-          VERSION=${{ steps.version.outputs.VERSION }}
-          sed -i "s/^version = .*/version = \"$VERSION\"/" release/claude/pyproject.toml
-          sed -i "s/^__version__ = .*/__version__ = \"$VERSION\"/" release/claude/lazykamui/__init__.py
+          tar czf mcp-async-skill.tar.gz -C $STAGING mcp-async-skill
 
-      - name: Commit and push
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add release/claude/
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "release: update release/claude/ to ${{ github.ref_name }}"
-            git push origin HEAD:main
-            # Update tag to include release files
-            git tag -f ${{ github.ref_name }}
-            git push origin ${{ github.ref_name }} --force
-          fi
+          gh release create ${{ github.ref_name }} \
+            mcp-async-skill.tar.gz \
+            --title "${{ github.ref_name }}" \
+            --notes "## Install
+
+          ### bash (Linux / macOS / WSL / Git Bash)
+          \`\`\`bash
+          mkdir -p .claude/skills
+          curl -fSL -o mcp-async-skill.tar.gz https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mcp-async-skill.tar.gz
+          tar xzf mcp-async-skill.tar.gz -C .claude/skills/
+          rm mcp-async-skill.tar.gz
+          pip install pyyaml requests
+          \`\`\`
+
+          ### PowerShell (Windows)
+          \`\`\`powershell
+          New-Item -ItemType Directory -Force -Path .claude\skills
+          curl.exe -fSL -o mcp-async-skill.tar.gz https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/mcp-async-skill.tar.gz
+          tar xzf mcp-async-skill.tar.gz -C .claude\skills\
+          Remove-Item mcp-async-skill.tar.gz
+          pip install pyyaml requests
+          \`\`\`"
