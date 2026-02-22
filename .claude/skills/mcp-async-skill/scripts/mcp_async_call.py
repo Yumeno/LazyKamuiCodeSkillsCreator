@@ -668,6 +668,7 @@ def _queue_submit_only(
     status_tool: str | None = None,
     result_tool: str | None = None,
     headers: dict | None = None,
+    rate_limits: dict | None = None,
 ) -> dict:
     """Submit a job to the queue and return immediately."""
     from job_queue.client import submit_job
@@ -679,6 +680,7 @@ def _queue_submit_only(
         status_tool=status_tool,
         result_tool=result_tool,
         headers=headers,
+        rate_limits=rate_limits,
     )
 
 
@@ -713,6 +715,7 @@ def _queue_blocking(
     status_tool: str | None = None,
     result_tool: str | None = None,
     headers: dict | None = None,
+    rate_limits: dict | None = None,
     poll_interval: float = 2.0,
     max_polls: int = 300,
 ) -> dict:
@@ -726,6 +729,7 @@ def _queue_blocking(
         status_tool=status_tool,
         result_tool=result_tool,
         headers=headers,
+        rate_limits=rate_limits,
         poll_interval=poll_interval,
         max_polls=max_polls,
     )
@@ -776,6 +780,19 @@ def route_execution(
     # Queue mode (--queue-config or --worker-url provided)
     if worker_url or queue_config_path:
         url = worker_url or resolve_worker_url(None, queue_config_path)
+
+        # Read endpoint rate limits from skill config if available
+        rate_limits = None
+        if queue_config_path and os.path.exists(queue_config_path) and endpoint:
+            try:
+                with open(queue_config_path, encoding="utf-8") as f:
+                    skill_config = json.load(f)
+                ep_limits = skill_config.get("endpoint_rate_limits", {}).get(endpoint)
+                if ep_limits:
+                    rate_limits = ep_limits
+            except (json.JSONDecodeError, OSError):
+                pass
+
         if submit_only:
             return _queue_submit_only(
                 worker_url=url,
@@ -785,6 +802,7 @@ def route_execution(
                 status_tool=status_tool,
                 result_tool=result_tool,
                 headers=headers if headers != {"Content-Type": "application/json"} else None,
+                rate_limits=rate_limits,
             )
         else:
             return _queue_blocking(
@@ -795,6 +813,7 @@ def route_execution(
                 status_tool=status_tool,
                 result_tool=result_tool,
                 headers=headers if headers != {"Content-Type": "application/json"} else None,
+                rate_limits=rate_limits,
                 poll_interval=poll_interval,
                 max_polls=max_polls,
             )
