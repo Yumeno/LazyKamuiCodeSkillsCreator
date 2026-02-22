@@ -898,10 +898,40 @@ def _copy_queue_files(scripts_dir: Path, skill_dir: Path, endpoint: str):
             daemon_src.read_text(encoding="utf-8"), encoding="utf-8"
         )
 
-    # Generate queue_config.json
-    config = generate_queue_config(endpoint)
+    # Generate or merge queue_config.json
+    new_config = generate_queue_config(endpoint)
     config_path = Path(skill_dir) / "queue_config.json"
-    config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    if config_path.exists():
+        # Merge: preserve user-customized settings
+        try:
+            existing = json.loads(config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+
+        merged = {**new_config}
+        # Preserve user-configurable fields from existing
+        for key in ("idle_timeout_seconds", "default_rate_limit",
+                     "endpoint_rate_limits", "results_dir",
+                     "job_retention_seconds"):
+            if key in existing:
+                merged[key] = existing[key]
+
+        # Add new endpoint if not already present
+        ep_limits = merged.setdefault("endpoint_rate_limits", {})
+        if endpoint and endpoint not in ep_limits:
+            new_ep_limits = new_config.get("endpoint_rate_limits", {}).get(endpoint)
+            if new_ep_limits:
+                ep_limits[endpoint] = new_ep_limits
+
+        config_path.write_text(
+            json.dumps(merged, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    else:
+        # New: create from scratch
+        config_path.write_text(
+            json.dumps(new_config, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
 
 def generate_wrapper_script(mcp_config: dict, tools: list[dict], skill_name: str) -> str:
