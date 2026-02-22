@@ -21,11 +21,11 @@ git pull
 
 ### 2. バージョンタグを作成・push
 
-`v` プレフィックス付きのセマンティックバージョニングタグを push します。
+`lazy-v` プレフィックス付きのセマンティックバージョニングタグを push します。
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag lazy-v2.0.0
+git push origin lazy-v2.0.0
 ```
 
 ### 3. GitHub Actions の自動処理
@@ -40,14 +40,14 @@ git push origin v1.0.0
    - `SKILL.md`
    - テスト・`__pycache__` は除外
 2. **バージョン書き換え** — `pyproject.toml` と `__init__.py` の version をタグから反映
-3. **コミット＆push** — `release: update release/claude/ to v1.0.0` として main に push
+3. **コミット＆push** — `release: update release/claude/ to lazy-v2.0.0` として main に push
 4. **タグ更新** — リリースファイルを含む状態でタグを force-update
 
 ### 4. 動作確認
 
 ```bash
 # pip install で確認（バージョン指定）
-pip install git+https://github.com/Yumeno/LazyKamuiCodeSkillsCreator.git@v1.0.0#subdirectory=release/claude
+pip install git+https://github.com/Yumeno/LazyKamuiCodeSkillsCreator.git@lazy-v2.0.0#subdirectory=release/claude
 
 # CLI が動くか
 generate-skill --help
@@ -59,7 +59,7 @@ python -c "import lazykamui; print(lazykamui.__version__)"
 ### 5. （任意）GitHub Releases にノートを追加
 
 ```bash
-gh release create v1.0.0 --title "v1.0.0" --notes "リリースノート内容"
+gh release create lazy-v2.0.0 --title "lazy-v2.0.0" --notes "リリースノート内容"
 ```
 
 ## バージョニング規則
@@ -68,24 +68,24 @@ gh release create v1.0.0 --title "v1.0.0" --notes "リリースノート内容"
 
 | 変更内容 | バージョン | 例 |
 |----------|-----------|-----|
-| 後方互換性のないAPI変更 | メジャー | v1.0.0 → v2.0.0 |
-| 後方互換性のある機能追加 | マイナー | v1.0.0 → v1.1.0 |
-| バグ修正 | パッチ | v1.0.0 → v1.0.1 |
+| 後方互換性のないAPI変更 | メジャー | lazy-v2.0.0 → lazy-v3.0.0 |
+| 後方互換性のある機能追加 | マイナー | lazy-v2.0.0 → lazy-v2.1.0 |
+| バグ修正 | パッチ | lazy-v2.0.0 → lazy-v2.0.1 |
 
 ## CI ワークフローの仕組み
 
 ```
-v* タグ push
+lazy-v* タグ push
   │
   ├─ checkout
-  ├─ タグからバージョン抽出（v1.0.0 → 1.0.0）
+  ├─ タグからバージョン抽出（lazy-v2.0.0 → 2.0.0）
   ├─ .claude/skills/ → release/claude/lazykamui/.claude/ にスクリプトをコピー
   ├─ pyproject.toml / __init__.py のバージョンを書き換え
   ├─ main にコミット＆push
   └─ タグを force-update（リリースファイル込みの状態に更新）
 ```
 
-タグの force-update により、`pip install ...@v1.0.0` で正しいバージョンのスクリプトが取得されます。
+タグの force-update により、`pip install ...@lazy-v2.0.0` で正しいバージョンのスクリプトが取得されます。
 
 ## トラブルシューティング
 
@@ -95,10 +95,10 @@ v* タグ push
 2. 修正を main に push
 3. タグを削除して再作成：
    ```bash
-   git tag -d v1.0.0
-   git push origin :refs/tags/v1.0.0
-   git tag v1.0.0
-   git push origin v1.0.0
+   git tag -d lazy-v2.0.0
+   git push origin :refs/tags/lazy-v2.0.0
+   git tag lazy-v2.0.0
+   git push origin lazy-v2.0.0
    ```
 
 ### ローカルでリリースパッケージを確認したい場合
