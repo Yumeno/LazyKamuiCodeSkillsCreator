@@ -51,6 +51,25 @@ def _find_placeholders(value: str) -> list[str]:
     return _PLACEHOLDER_RE.findall(value)
 
 
+def _sanitize_env_var_name(header_name: str) -> str:
+    """Convert a header name to a valid environment variable name.
+
+    e.g. 'KAMUI-CODE-PASS' -> 'KAMUI_CODE_PASS'
+    """
+    return re.sub(r'[^A-Z0-9_]', '_', header_name.upper())
+
+
+def _mask_header_value(header_name: str, header_value: str) -> str:
+    """Return a masked display value for plaintext auth headers.
+
+    If the value contains ${VAR_NAME} placeholders, return as-is.
+    Otherwise, return a placeholder suggestion like '${HEADER_NAME}'.
+    """
+    if _has_placeholders(header_value):
+        return header_value
+    return f"${{{_sanitize_env_var_name(header_name)}}}"
+
+
 def load_mcp_config(path: str) -> dict:
     """Load .mcp.json configuration (single server, legacy).
 
@@ -328,9 +347,11 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
         header_lines = []
         if all_headers:
             for k, v in all_headers.items():
-                header_lines.append(f'  --header "{k}:{v}"')
+                display_v = v if _has_placeholders(v) else f"${{{_sanitize_env_var_name(k)}}}"
+                header_lines.append(f'  --header "{k}:{display_v}"')
         elif auth_header and auth_value:
-            header_lines.append(f'  --header "{auth_header}:{auth_value}"')
+            display_v = auth_value if _has_placeholders(auth_value) else f"${{{_sanitize_env_var_name(auth_header)}}}"
+            header_lines.append(f'  --header "{auth_header}:{display_v}"')
 
         header_arg = " \\\n".join(header_lines) if header_lines else ""
         if header_arg:
@@ -531,13 +552,19 @@ def generate_skill_md(mcp_config: dict, tools: list[dict], skill_name: str, lazy
     all_headers = mcp_config.get("all_headers", {})
     auth_section = ""
     if all_headers:
-        headers_lines = "\n".join([f"{k}: {v}" for k, v in all_headers.items()])
+        headers_lines = "\n".join([f"{k}: {_mask_header_value(k, v)}" for k, v in all_headers.items()])
 
         # Detect placeholders and generate env var guide
         env_note = ""
         placeholder_vars = []
         for v in all_headers.values():
             placeholder_vars.extend(_find_placeholders(v))
+        # Collect plaintext headers that were masked
+        masked_vars = [
+            _sanitize_env_var_name(k)
+            for k, v in all_headers.items()
+            if not _has_placeholders(v)
+        ]
         if placeholder_vars:
             unique_vars = sorted(set(placeholder_vars))
             vars_list = ', '.join(f'`{var}`' for var in unique_vars)
@@ -545,6 +572,13 @@ def generate_skill_md(mcp_config: dict, tools: list[dict], skill_name: str, lazy
 > **Note:** Header values contain environment variable placeholders.
 > Set these variables before execution or define them in a `.env` file:
 > {vars_list}
+"""
+        if masked_vars:
+            masked_list = ', '.join(f'`{var}`' for var in sorted(set(masked_vars)))
+            env_note += f"""
+> **Warning:** Some header values were plaintext keys and have been masked.
+> Set these environment variables or define them in a `.env` file:
+> {masked_list}
 """
 
         auth_section = f"""
@@ -558,6 +592,7 @@ This MCP requires the following headers:
 {env_note}"""
     elif auth_header and auth_value:
         # Detect placeholders in single auth value
+        masked_value = _mask_header_value(auth_header, auth_value)
         env_note = ""
         placeholder_vars = _find_placeholders(auth_value)
         if placeholder_vars:
@@ -568,6 +603,13 @@ This MCP requires the following headers:
 > Set these variables before execution or define them in a `.env` file:
 > {vars_list}
 """
+        elif masked_value != auth_value:
+            # Plaintext was masked — tell user to set the env var
+            var_name = _sanitize_env_var_name(auth_header)
+            env_note = f"""
+> **Warning:** The original value was a plaintext key and has been masked.
+> Set the `{var_name}` environment variable or define it in a `.env` file.
+"""
 
         auth_section = f"""
 ## Authentication
@@ -575,7 +617,7 @@ This MCP requires the following headers:
 This MCP requires authentication header:
 
 ```
-{auth_header}: {auth_value}
+{auth_header}: {masked_value}
 ```
 {env_note}"""
 
@@ -659,16 +701,17 @@ python -c "import fal_client; url=fal_client.upload_file('/storage/emulated/0/{c
 The returned URL can be used in the `{cfg['param']}` parameter.
 """
 
-    # Build header argument for Quick Start
+    # Build header argument for Quick Start (mask plaintext auth values)
     header_arg = ""
     auth_headers_python = ""
     if all_headers:
-        header_lines = [f'  --header "{k}:{v}" \\' for k, v in all_headers.items()]
+        header_lines = [f'  --header "{k}:{_mask_header_value(k, v)}" \\' for k, v in all_headers.items()]
         header_arg = "\n" + "\n".join(header_lines)
-        auth_headers_python = "\n".join([f'    "{k}": "{v}",' for k, v in all_headers.items()])
+        auth_headers_python = "\n".join([f'    "{k}": "{_mask_header_value(k, v)}",' for k, v in all_headers.items()])
     elif auth_header and auth_value:
-        header_arg = f'\n  --header "{auth_header}:{auth_value}" \\'
-        auth_headers_python = f'    "{auth_header}": "{auth_value}",'
+        masked = _mask_header_value(auth_header, auth_value)
+        header_arg = f'\n  --header "{auth_header}:{masked}" \\'
+        auth_headers_python = f'    "{auth_header}": "{masked}",'
 
     # Get example args based on required parameters
     example_args = get_required_params_example(tools)
@@ -1010,17 +1053,24 @@ def generate_wrapper_script(mcp_config: dict, tools: list[dict], skill_name: str
     pattern = identify_async_pattern(tools)
     id_param_name = detect_id_param_name(tools)
 
-    # Get auth headers for --header arguments
+    # Get auth headers for --header arguments (mask plaintext values)
     all_headers = mcp_config.get("all_headers", {})
     auth_header = mcp_config.get("auth_header", "")
     auth_value = mcp_config.get("auth_value", "")
 
     header_defaults = []
+    has_plaintext = False
     if all_headers:
         for k, v in all_headers.items():
-            header_defaults.append(f'    ("--header", "{k}:{v}"),')
+            masked = _mask_header_value(k, v)
+            if masked != v:
+                has_plaintext = True
+            header_defaults.append(f'    ("--header", "{k}:{masked}"),')
     elif auth_header and auth_value:
-        header_defaults.append(f'    ("--header", "{auth_header}:{auth_value}"),')
+        masked = _mask_header_value(auth_header, auth_value)
+        if masked != auth_value:
+            has_plaintext = True
+        header_defaults.append(f'    ("--header", "{auth_header}:{masked}"),')
 
     header_defaults_str = "\n".join(header_defaults) if header_defaults else ""
 
@@ -1153,8 +1203,37 @@ def generate_skill(
     wrapper_path.write_text(wrapper, encoding='utf-8')
     os.chmod(wrapper_path, 0o755)
 
-    # Save original configs as references
-    (references_dir / "mcp.json").write_text(json.dumps(mcp_config, indent=2, ensure_ascii=False), encoding='utf-8')
+    # Warn if plaintext auth values were detected and masked
+    _all_headers = mcp_config.get("all_headers", {})
+    _auth_header = mcp_config.get("auth_header", "")
+    _auth_value = mcp_config.get("auth_value", "")
+    _plaintext_keys = []
+    if _all_headers:
+        for k, v in _all_headers.items():
+            if not _has_placeholders(v):
+                _plaintext_keys.append(_sanitize_env_var_name(k))
+    elif _auth_header and _auth_value and not _has_placeholders(_auth_value):
+        _plaintext_keys.append(_sanitize_env_var_name(_auth_header))
+    if _plaintext_keys:
+        print(
+            f"\n⚠ WARNING: Plaintext authentication key(s) detected in .mcp.json.\n"
+            f"  Generated files use ${{{', '.join(_plaintext_keys)}}} placeholder(s) instead.\n"
+            f"  Set these environment variables or add them to a .env file before execution.\n"
+            f"  Tip: Use ${{VAR_NAME}} syntax in .mcp.json headers to avoid this warning.\n",
+            file=sys.stderr,
+        )
+
+    # Save original configs as references (mask plaintext auth values)
+    safe_config = dict(mcp_config)
+    if safe_config.get("all_headers"):
+        safe_config["all_headers"] = {
+            k: _mask_header_value(k, v) for k, v in safe_config["all_headers"].items()
+        }
+    if safe_config.get("auth_value") and not _has_placeholders(safe_config["auth_value"]):
+        safe_config["auth_value"] = _mask_header_value(
+            safe_config.get("auth_header", ""), safe_config["auth_value"]
+        )
+    (references_dir / "mcp.json").write_text(json.dumps(safe_config, indent=2, ensure_ascii=False), encoding='utf-8')
 
     if lazy:
         # Lazy mode: save as YAML in tools/ directory
@@ -1330,8 +1409,37 @@ def generate_skill_internal(
     wrapper_path.write_text(wrapper, encoding='utf-8')
     os.chmod(wrapper_path, 0o755)
 
-    # Save original configs as references
-    (references_dir / "mcp.json").write_text(json.dumps(mcp_config, indent=2, ensure_ascii=False), encoding='utf-8')
+    # Warn if plaintext auth values were detected and masked
+    _all_headers = mcp_config.get("all_headers", {})
+    _auth_header = mcp_config.get("auth_header", "")
+    _auth_value = mcp_config.get("auth_value", "")
+    _plaintext_keys = []
+    if _all_headers:
+        for k, v in _all_headers.items():
+            if not _has_placeholders(v):
+                _plaintext_keys.append(_sanitize_env_var_name(k))
+    elif _auth_header and _auth_value and not _has_placeholders(_auth_value):
+        _plaintext_keys.append(_sanitize_env_var_name(_auth_header))
+    if _plaintext_keys:
+        print(
+            f"\n⚠ WARNING: Plaintext authentication key(s) detected in .mcp.json.\n"
+            f"  Generated files use ${{{', '.join(_plaintext_keys)}}} placeholder(s) instead.\n"
+            f"  Set these environment variables or add them to a .env file before execution.\n"
+            f"  Tip: Use ${{VAR_NAME}} syntax in .mcp.json headers to avoid this warning.\n",
+            file=sys.stderr,
+        )
+
+    # Save original configs as references (mask plaintext auth values)
+    safe_config = dict(mcp_config)
+    if safe_config.get("all_headers"):
+        safe_config["all_headers"] = {
+            k: _mask_header_value(k, v) for k, v in safe_config["all_headers"].items()
+        }
+    if safe_config.get("auth_value") and not _has_placeholders(safe_config["auth_value"]):
+        safe_config["auth_value"] = _mask_header_value(
+            safe_config.get("auth_header", ""), safe_config["auth_value"]
+        )
+    (references_dir / "mcp.json").write_text(json.dumps(safe_config, indent=2, ensure_ascii=False), encoding='utf-8')
 
     if lazy:
         # Lazy mode: save as YAML in tools/ directory
