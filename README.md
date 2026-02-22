@@ -21,7 +21,8 @@ Claude Code用のMCPスキルジェネレーター。非同期ジョブパター
 | **重複ファイル回避** | 同名ファイル存在時にサフィックス自動付与（`_1`, `_2`...） | 自動 | [📖](docs/output-path-strategy.md) |
 | **ログ保存** | リクエスト/レスポンスJSONを保存（logsフォルダまたはインライン） | `--save-logs`, `--save-logs-inline` | [📖](docs/output-path-strategy.md) |
 | **複数ファイル対応** | レスポンス内の全URLを再帰探索し一括ダウンロード。連番サフィックス自動付与 | 自動 | [📖](docs/output-path-strategy.md) |
-| **キューイングシステム** | ローカルワーカーによるリクエスト並行数・実行間隔の制御。エンドポイント別レートリミット、自動起動・終了 | `--submit-only`, `--wait`, `--blocking` | [📖](docs/queue_system_design.md) |
+| **キューシステム** | ローカルワーカーによるエンドポイント別レートリミットと並行数制御。自動起動・自動終了 | `--queue-config` | [📖](docs/queue_system_design.md) |
+| **キュー堅牢化** | ゾンビジョブ回復・指数バックオフリトライ・429 Retry-After対応・ワーカー側ダウンロード | 自動 | [📖](docs/queue_system_hardening.md) |
 
 ### ⚠️ 実行ディレクトリについて
 
@@ -113,9 +114,16 @@ python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
 ```
 .claude/skills/<skill-name>/
 ├── SKILL.md              # 使用方法ドキュメント（全ツール詳細含む）
+├── queue_config.json     # キュー設定（レートリミット等）
 ├── scripts/
 │   ├── mcp_async_call.py # コア非同期コーラー
-│   └── <skill_name>.py   # 便利ラッパー
+│   ├── mcp_worker_daemon.py # キューワーカーデーモン
+│   ├── <skill_name>.py   # 便利ラッパー
+│   └── job_queue/        # キューシステムパッケージ
+│       ├── db.py         # SQLiteジョブストア
+│       ├── dispatcher.py # エンドポイント別レートリミット
+│       ├── worker.py     # HTTP REST APIサーバー
+│       └── client.py     # キュークライアント
 └── references/
     ├── mcp.json          # 元のMCPコンフィグ
     └── tools.json        # 元のツール仕様
@@ -125,9 +133,12 @@ python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
 ```
 .claude/skills/<skill-name>/
 ├── SKILL.md              # 使用方法ドキュメント（軽量版）
+├── queue_config.json     # キュー設定（レートリミット等）
 ├── scripts/
 │   ├── mcp_async_call.py # コア非同期コーラー
-│   └── <skill_name>.py   # 便利ラッパー
+│   ├── mcp_worker_daemon.py # キューワーカーデーモン
+│   ├── <skill_name>.py   # 便利ラッパー
+│   └── job_queue/        # キューシステムパッケージ
 └── references/
     ├── mcp.json          # 元のMCPコンフィグ
     └── tools/
@@ -288,9 +299,14 @@ python scripts/mcp_async_call.py \
 | `--config, -c` | .mcp.jsonからエンドポイントを読み込み |
 | `--save-logs` | `{output}/logs/` にリクエスト/レスポンスログを保存 |
 | `--save-logs-inline` | 出力ファイルと同じ場所に `{filename}_*.json` 形式でログ保存 |
+| `--queue-config` | queue_config.jsonへのパス（キューモード有効化） |
+| `--worker-url` | ワーカーURL（デフォルト: queue_config.jsonから取得） |
 | `--submit-only` | ジョブをキューに投入し `job_id` を返して即終了 |
 | `--wait JOB_ID` | 指定ジョブの状態を1回確認して返却 |
 | `--blocking` | submit → wait ポーリング → ダウンロードを一括実行（デフォルト、従来互換） |
+| `--list` | キュー内の全ジョブを一覧（JSON出力） |
+| `--stats` | エンドポイント別統計情報を表示 |
+| `--filter-status` | `--list`使用時にステータスでフィルタ |
 
 **拡張子の決定順序:**
 1. `--output-file` で指定されている場合はその拡張子
@@ -322,9 +338,12 @@ MCP仕様から完全なスキルを生成。
 ```
 skill-name/
 ├── SKILL.md              # 使用方法ドキュメント
+├── queue_config.json     # キュー設定（レートリミット等）
 ├── scripts/
 │   ├── mcp_async_call.py # コア非同期コーラー
-│   └── skill_name.py     # 便利ラッパー
+│   ├── mcp_worker_daemon.py # キューワーカーデーモン
+│   ├── skill_name.py     # 便利ラッパー
+│   └── job_queue/        # キューシステムパッケージ
 └── references/
     ├── mcp.json          # 元のMCPコンフィグ
     └── tools.json        # 元のツール仕様
@@ -336,6 +355,8 @@ skill-name/
 |-----------|------|
 | `pending`, `queued` | ジョブ待機中 |
 | `processing`, `running` | 処理中 |
+| `polling` | リモートMCPに送信済み、ポーリング中 |
+| `recovering` | ワーカー再起動後の回復待ち |
 | `completed`, `done`, `success` | 完了 |
 | `failed`, `error` | 失敗 |
 
@@ -358,6 +379,69 @@ result = run_async_mcp_job(
 print(result["saved_path"])  # ダウンロードしたファイルへのパス
 ```
 
+## キューシステム
+
+生成されたスキルには、AIエージェントが並列にツールを呼び出した際のMCPサーバー過負荷を防ぐローカルキューシステムが含まれます。
+
+### 仕組み
+
+- ローカルワーカーデーモン（port 54321）がHTTP APIでジョブを受け付け、エンドポイント別にレートリミットを適用
+- 初回使用時に自動起動、アイドルタイムアウト（デフォルト: 60秒）で自動終了
+- SQLiteでジョブ状態を永続化。複数スキルで共有キューディレクトリ（`.claude/queue/`）を使用
+
+### キューモード
+
+```bash
+# 送信して結果を待つ（デフォルト、従来互換）
+python skill_name.py --args '{"prompt": "..."}'
+
+# 送信のみ - job_idを即座に返す
+python skill_name.py --submit-only --args '{"prompt": "..."}'
+
+# ジョブ状態を確認
+python mcp_async_call.py --queue-config ../queue_config.json --wait JOB_ID
+
+# キュー内ジョブ一覧
+python mcp_async_call.py --queue-config ../queue_config.json --list
+
+# エンドポイント別統計
+python mcp_async_call.py --queue-config ../queue_config.json --stats
+```
+
+### 堅牢化機能
+
+| 機能 | 説明 |
+|-----|------|
+| **ゾンビジョブ回復** | ワーカー再起動時、処理中だったジョブを自動的に回復（polling+remote_job_id有り→recovering）または失敗マーク |
+| **指数バックオフリトライ** | 接続エラー・503/504に対し2s→4s→8sのバックオフで自動リトライ（最大3回） |
+| **429 Retry-After対応** | 429レスポンスのRetry-Afterヘッダーを尊重し、エンドポイント単位で一時停止 |
+| **ワーカー側ダウンロード** | 結果ファイルをワーカーがダウンロードし `results/{job_id}/` に保存 |
+| **古いジョブ自動削除** | 起動時に指定期間超過のジョブをDB・結果ファイルごと自動削除（デフォルト: 24時間） |
+| **設定マージ保護** | スキル再生成時にqueue_config.jsonのユーザーカスタマイズを保持 |
+
+### 設定例 (queue_config.json)
+
+```json
+{
+  "port": 54321,
+  "idle_timeout_seconds": 60,
+  "default_rate_limit": {
+    "max_concurrent_jobs": 2,
+    "min_interval_seconds": 2.0
+  },
+  "endpoint_rate_limits": {
+    "http://slow-server:8000": {
+      "max_concurrent_jobs": 1,
+      "min_interval_seconds": 10.0
+    }
+  },
+  "job_retention_seconds": 86400,
+  "results_dir": ".claude/queue/results"
+}
+```
+
+> 📖 詳細: [キューシステム設計](docs/queue_system_design.md) / [堅牢化設計](docs/queue_system_hardening.md)
+
 ## エラーハンドリング
 
 スクリプトは以下を処理します：
@@ -365,6 +449,9 @@ print(result["saved_path"])  # ダウンロードしたファイルへのパス
 - ジョブ失敗（status: failed/error）
 - 最大ポーリング後のタイムアウト
 - ダウンロード失敗
+- 接続エラー時の自動リトライ（指数バックオフ）
+- 429 Too Many Requests（Retry-After尊重）
+- ゾンビジョブの自動回復・失敗マーク
 
 すべてのエラーは説明的なメッセージを含む例外を発生させます。
 
@@ -436,43 +523,6 @@ flux_lora_result:
 ```
 
 AIはこのYAMLファイル1つを読むだけで、実行に必要な情報をすべて取得できます。
-
-## キューイングシステム（設計段階）
-
-AIエージェントが複数ツールを並列に高速呼び出しした場合、外部MCPサーバーへのアクセス集中やレートリミット（429）エラーを防ぐためのキューイング層です。
-
-### アーキテクチャ
-
-```
-[Client] ──HTTP──> [Worker Daemon (Singleton)] ──> [SQLite] ──> [外部MCPサーバー]
-                   エンドポイント別レートリミット
-                   自動起動・自動終了
-```
-
-### 主な特徴
-
-| 特徴 | 説明 |
-|-----|------|
-| **エンドポイント別制御** | 宛先ごとに独立したキューと並行数・間隔を設定。Head-of-Lineブロッキングを防止 |
-| **3つの動作モード** | `--submit-only`（投入のみ）、`--wait`（状態確認）、`--blocking`（従来互換） |
-| **自動起動・終了** | ワーカー未起動時は自動起動、アイドル時は自動終了 |
-| **クロスプラットフォーム** | Windows / macOS / Linux 対応 |
-| **標準ライブラリ中心** | `http.server`, `sqlite3`, `threading` 等を使用 |
-
-### 動作モード
-
-```bash
-# submit-only: ジョブ投入のみ（即座にjob_idを返却）
-python mcp_async_call.py --submit-only --endpoint http://... --submit-tool generate --args '{"prompt":"cat"}'
-
-# wait: ジョブ状態を1回確認
-python mcp_async_call.py --wait <job_id>
-
-# blocking: 従来互換（完了まで待機）
-python mcp_async_call.py --endpoint http://... --submit-tool generate --args '{"prompt":"cat"}'
-```
-
-> 📖 詳細: [キューイングシステム設計書](docs/queue_system_design.md)
 
 ## ライセンス
 
