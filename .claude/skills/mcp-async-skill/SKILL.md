@@ -240,6 +240,13 @@ Main async MCP caller with full flow automation.
 - `--config, -c`: Load endpoint from .mcp.json
 - `--save-logs`: Save request/response logs to `{output}/logs/`
 - `--save-logs-inline`: Save logs alongside output file as `{filename}_*.json`
+- `--queue-config`: Path to queue_config.json (enables queue mode with rate limiting)
+- `--worker-url`: Worker URL (default: from queue config)
+- `--submit-only`: Submit job and return job_id immediately
+- `--wait JOB_ID`: Query job status by ID
+- `--list`: List all jobs in the queue (JSON output)
+- `--stats`: Show per-endpoint statistics (JSON output)
+- `--filter-status`: Filter jobs by status (used with `--list`)
 
 **File Extension Detection:**
 
@@ -278,9 +285,16 @@ Skills are generated to `.claude/skills/<skill-name>/`:
 ```
 .claude/skills/<skill-name>/
 ├── SKILL.md              # Usage documentation (full tool details)
+├── queue_config.json     # Queue rate limit configuration
 ├── scripts/
 │   ├── mcp_async_call.py # Core async caller
-│   └── skill_name.py     # Convenience wrapper
+│   ├── mcp_worker_daemon.py # Queue worker daemon
+│   ├── skill_name.py     # Convenience wrapper
+│   └── job_queue/        # Queue system package
+│       ├── db.py         # SQLite job store
+│       ├── dispatcher.py # Per-endpoint rate limiting
+│       ├── worker.py     # HTTP REST API server
+│       └── client.py     # Queue client (submit/wait/blocking)
 └── references/
     ├── mcp.json          # Original MCP config
     └── tools.json        # Original tool specs
@@ -290,9 +304,12 @@ Skills are generated to `.claude/skills/<skill-name>/`:
 ```
 .claude/skills/<skill-name>/
 ├── SKILL.md              # Usage documentation (minimal)
+├── queue_config.json     # Queue rate limit configuration
 ├── scripts/
 │   ├── mcp_async_call.py # Core async caller
-│   └── skill_name.py     # Convenience wrapper
+│   ├── mcp_worker_daemon.py # Queue worker daemon
+│   ├── skill_name.py     # Convenience wrapper
+│   └── job_queue/        # Queue system package
 └── references/
     ├── mcp.json          # Original MCP config
     └── tools/
@@ -325,6 +342,48 @@ result = run_async_mcp_job(
 )
 
 print(result["saved_path"])  # Path to downloaded file
+```
+
+## Queue System (Rate Limiting)
+
+Generated skills include a local queue system that prevents overloading MCP servers when AI agents call tools in parallel.
+
+**How it works:**
+- A local worker daemon accepts job submissions via HTTP and dispatches them with per-endpoint rate limiting
+- The worker starts automatically on first use and stops after idle timeout (default: 60s)
+- Rate limits are configured per-endpoint in `queue_config.json`
+
+**Queue modes:**
+
+```bash
+# Submit and wait for result (default, backward compatible)
+python skill_name.py --args '{"prompt": "..."}'
+
+# Submit only - returns job_id immediately
+python skill_name.py --submit-only --args '{"prompt": "..."}'
+
+# Check job status
+python mcp_async_call.py --queue-config ../queue_config.json --wait JOB_ID
+
+# List all jobs in the queue
+python mcp_async_call.py --queue-config ../queue_config.json --list
+
+# List only pending jobs
+python mcp_async_call.py --queue-config ../queue_config.json --list --filter-status pending
+
+# Show per-endpoint statistics
+python mcp_async_call.py --queue-config ../queue_config.json --stats
+```
+
+**queue_config.json example:**
+
+```json
+{
+  "port": 54321,
+  "idle_timeout_seconds": 60,
+  "default_rate_limit": { "max_concurrent_jobs": 2, "min_interval_seconds": 2.0 },
+  "endpoint_rate_limits": { "http://slow-server:8000": { "max_concurrent_jobs": 1, "min_interval_seconds": 10.0 } }
+}
 ```
 
 ## Error Handling
