@@ -1305,19 +1305,8 @@ def generate_skill(
 
 
 def get_default_output_dir() -> str:
-    """Get default output directory (.claude/skills relative to cwd or script location)."""
-    # Try current working directory first
-    cwd_skills = Path.cwd() / ".claude" / "skills"
-    if cwd_skills.parent.exists():  # .claude exists
-        return str(cwd_skills)
-
-    # Fall back to script location
-    script_skills = Path(__file__).parent.parent.parent
-    if script_skills.name == "skills" and script_skills.parent.name == ".claude":
-        return str(script_skills)
-
-    # Default to cwd/.claude/skills
-    return str(cwd_skills)
+    """Get default output directory (.claude/skills relative to cwd)."""
+    return str(Path.cwd() / ".claude" / "skills")
 
 
 def generate_skills_for_servers(
