@@ -197,6 +197,59 @@ class JobStore:
             for row in cur.fetchall()
         ]
 
+    def get_stale_jobs(self, statuses: list[str]) -> list[dict]:
+        """Return all jobs with the given statuses (for zombie recovery on startup).
+
+        Args:
+            statuses: List of status values to match (e.g. ["running", "polling"]).
+
+        Returns:
+            List of job dicts ordered by created_at ascending (oldest first).
+        """
+        placeholders = ",".join("?" * len(statuses))
+        cur = self.conn.execute(
+            f"SELECT * FROM jobs WHERE status IN ({placeholders}) ORDER BY created_at ASC",
+            statuses,
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+    def purge_old_jobs(self, retention_seconds: float = 86400.0) -> int:
+        """Delete completed/failed jobs older than retention_seconds.
+
+        Args:
+            retention_seconds: How long to keep terminal jobs (default 24h).
+
+        Returns:
+            Number of deleted jobs.
+        """
+        cur = self.conn.execute(
+            """
+            DELETE FROM jobs
+            WHERE status IN ('completed', 'failed')
+              AND (julianday('now') - julianday(updated_at)) * 86400.0 >= ?
+            """,
+            (retention_seconds,),
+        )
+        self.conn.commit()
+        return cur.rowcount
+
+    def get_recovering_endpoints(self) -> list[str]:
+        """Return unique endpoints that have recovering jobs."""
+        cur = self.conn.execute(
+            "SELECT DISTINCT endpoint FROM jobs WHERE status = 'recovering'"
+        )
+        return [row[0] for row in cur.fetchall()]
+
+    def get_oldest_recovering(self, endpoint: str) -> dict | None:
+        """Get the oldest recovering job for a given endpoint."""
+        cur = self.conn.execute(
+            "SELECT * FROM jobs WHERE endpoint = ? AND status = 'recovering' "
+            "ORDER BY created_at ASC LIMIT 1",
+            (endpoint,),
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
     def close(self):
         """Close the database connection."""
         self.conn.close()
