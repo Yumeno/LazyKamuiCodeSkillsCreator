@@ -34,6 +34,21 @@ except Exception:
 # Default catalog URL
 CATALOG_URL = "https://raw.githubusercontent.com/Yumeno/kamuicode-config-manager/main/mcp_tool_catalog.yaml"
 
+# ---------------------------------------------------------------------------
+# Placeholder detection helpers for ${VAR_NAME} in header values
+# ---------------------------------------------------------------------------
+_PLACEHOLDER_RE = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}')
+
+
+def _has_placeholders(value: str) -> bool:
+    """Check if a string contains ${VAR_NAME} placeholders."""
+    return bool(_PLACEHOLDER_RE.search(value))
+
+
+def _find_placeholders(value: str) -> list[str]:
+    """Extract all placeholder variable names from a string."""
+    return _PLACEHOLDER_RE.findall(value)
+
 
 def load_mcp_config(path: str) -> dict:
     """Load .mcp.json configuration (single server, legacy).
@@ -328,6 +343,19 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
   --args '{example_args}'{header_arg} \\
   --output ./output"""
 
+        # Build notes dict (with optional env_vars entry for placeholders)
+        notes_dict = {
+            "execution": "必ずプロジェクトルートから実行すること",
+            "output_path": "--output の相対パスはカレントディレクトリ基準",
+            "multi_file": "複数URLがある場合は全て自動ダウンロード (連番サフィックス付与)",
+            "extension": "拡張子は --output-file > Content-Type > URL の優先順位で決定",
+        }
+        if all_headers and any(_has_placeholders(v) for v in all_headers.values()):
+            notes_dict["env_vars"] = (
+                "ヘッダーに環境変数プレースホルダー(${VAR})が含まれます。"
+                "実行前に環境変数を設定するか、.envファイルに定義してください。"
+            )
+
         result["_usage"] = {
             "description": "How to execute this MCP server's tools (run from project root)",
             "bash": bash_example,
@@ -350,12 +378,7 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
                 "--save-logs": "{output}/logs/ にログ保存",
                 "--save-logs-inline": "出力ファイル横にログ保存",
             },
-            "notes": {
-                "execution": "必ずプロジェクトルートから実行すること",
-                "output_path": "--output の相対パスはカレントディレクトリ基準",
-                "multi_file": "複数URLがある場合は全て自動ダウンロード (連番サフィックス付与)",
-                "extension": "拡張子は --output-file > Content-Type > URL の優先順位で決定",
-            },
+            "notes": notes_dict,
         }
 
     # Add tool definitions
@@ -503,6 +526,21 @@ def generate_skill_md(mcp_config: dict, tools: list[dict], skill_name: str, lazy
     auth_section = ""
     if all_headers:
         headers_lines = "\n".join([f"{k}: {v}" for k, v in all_headers.items()])
+
+        # Detect placeholders and generate env var guide
+        env_note = ""
+        placeholder_vars = []
+        for v in all_headers.values():
+            placeholder_vars.extend(_find_placeholders(v))
+        if placeholder_vars:
+            unique_vars = sorted(set(placeholder_vars))
+            vars_list = ', '.join(f'`{var}`' for var in unique_vars)
+            env_note = f"""
+> **Note:** Header values contain environment variable placeholders.
+> Set these variables before execution or define them in a `.env` file:
+> {vars_list}
+"""
+
         auth_section = f"""
 ## Authentication
 
@@ -511,8 +549,20 @@ This MCP requires the following headers:
 ```
 {headers_lines}
 ```
-"""
+{env_note}"""
     elif auth_header and auth_value:
+        # Detect placeholders in single auth value
+        env_note = ""
+        placeholder_vars = _find_placeholders(auth_value)
+        if placeholder_vars:
+            unique_vars = sorted(set(placeholder_vars))
+            vars_list = ', '.join(f'`{var}`' for var in unique_vars)
+            env_note = f"""
+> **Note:** Header value contains environment variable placeholders.
+> Set these variables before execution or define them in a `.env` file:
+> {vars_list}
+"""
+
         auth_section = f"""
 ## Authentication
 
@@ -521,7 +571,7 @@ This MCP requires authentication header:
 ```
 {auth_header}: {auth_value}
 ```
-"""
+{env_note}"""
 
     # Async pattern section
     async_section = ""

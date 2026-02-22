@@ -163,6 +163,33 @@ With multi-server format:
 - `python generate_skill.py -m mcp.json -s fal-ai/flux-lora` → Generates only specified server
 - `python generate_skill.py -m mcp.json -s server1 -s server2` → Multiple servers
 
+**With environment variable placeholders:**
+
+Headers can use `${VAR_NAME}` placeholders instead of plaintext credentials. Placeholders are preserved during skill generation and resolved at runtime:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "url": "https://mcp.example.com/sse",
+      "headers": {
+        "Authorization": "Bearer ${MCP_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+Resolution order:
+1. Environment variables (`os.environ`)
+2. `.env` file (searched in CWD, then home directory)
+
+`.env` file format:
+```bash
+# .env (place in project root, add to .gitignore)
+MCP_API_KEY=sk-your-actual-key
+```
+
 **Single-server format:**
 
 ```json
