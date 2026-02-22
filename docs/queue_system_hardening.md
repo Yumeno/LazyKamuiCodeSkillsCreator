@@ -172,38 +172,61 @@
   │     retention_seconds（デフォルト24時間）超過分を DELETE
   │     対応する results/{job_id}/ ディレクトリも削除
   │
-  ├── 4. ゾンビジョブの巻き戻し
+  ├── 4. ゾンビジョブの状態遷移
   │     ├── running (remote_job_id なし) → failed（submit未完了、回復不能）
-  │     └── polling (remote_job_id あり) → pending に巻き戻し
+  │     └── polling (remote_job_id あり) → recovering（回復専用ステータス）
   │           session_id, remote_job_id はDB上に保持したまま
-  │           → Dispatcher が通常のrate limitチェック後にディスパッチ
-  │           → execute_job が remote_job_id の存在を検出し、
-  │             submit フェーズをスキップして poll+result から再開
   │
   ├── 5. HTTP サーバー起動
-  ├── 6. Dispatcher 起動（巻き戻された pending ジョブを通常のフローで処理）
+  ├── 6. Dispatcher 起動
+  │     recovering ジョブを rate limit 適用の上でディスパッチ
+  │     submit をスキップし polling → completed/failed と遷移
   └── 7. Idle Monitor 起動
 ```
 
 ### 3.6. ゾンビ回復と Rate Limit の整合性
 
-回復ジョブは Dispatcher を経由して実行されるため、通常のジョブと同じ rate limit が適用されます。
+回復ジョブも Dispatcher を経由して実行するため、通常のジョブと同じ rate limit が適用されます。submit の再実行（二重課金）を避けるため、回復専用ステータス `recovering` を導入します。
+
+**ステータス遷移図（拡張版）**:
 
 ```
-polling ゾンビ 5件が起動時に pending に巻き戻された場合:
+新規ジョブ:
+  pending → running → polling → completed / failed
+
+回復ジョブ:
+  polling（ゾンビ） → recovering → polling → completed / failed
+                       ↑                ↑
+                   起動時に変更     Dispatcher がディスパッチ
+                                   running を経由しない
+                                   = submit しない = 二重課金なし
+```
+
+**Dispatcher の動作**:
+
+```
+polling ゾンビ 5件が起動時に recovering に変更された場合:
 
   Dispatcher.dispatch_once():
-    endpoint "http://fal.ai" の rate limit: max_concurrent=1, min_interval=10.0s
-    → 1件ずつ、10秒間隔でディスパッチ
-    → 429 は発生しない
+    1. 通常の pending ジョブのディスパッチ（既存ロジック）
+    2. recovering ジョブのディスパッチ（追加ロジック）
+       endpoint "http://fal.ai" の rate limit: max_concurrent=1, min_interval=10.0s
+       → recovering ジョブを1件取得
+       → status を "polling" に更新（running をスキップ）
+       → スレッドプールに submit して _run_job 実行
+       → rate limit に従い、次の recovering は min_interval 後
 
   execute_job(job):
-    job["remote_job_id"] が存在する
-    → submit フェーズをスキップ（二重課金なし）
-    → _poll_and_get_result() から再開
+    job["remote_job_id"] が存在する（DB上に保持されている）
+    → submit フェーズをスキップ
+    → _poll_and_get_result() から再開（poll + result + download）
 ```
 
-`execute_job` 内の分岐:
+**count_active_jobs() への影響**:
+
+`recovering` は外部通信をまだ開始していない状態のため、active（`running` + `polling`）には含めません。Dispatcher がディスパッチして `polling` にした時点で active カウントに入ります。
+
+**execute_job 内の分岐**:
 
 ```python
 def execute_job(job):
@@ -350,30 +373,30 @@ def purge_old_jobs(self, retention_seconds: float = 86400.0) -> int:
 
 #### 4.3.2. WorkerApp.start() の拡張
 
-`job_queue/worker.py` の `start()` メソッドにパージ・巻き戻し処理を追加します。
+`job_queue/worker.py` の `start()` メソッドにパージ・ゾンビ処理を追加します。
 
 ```python
 def start(self, rollback_fn=None, retention_seconds: float = 86400.0):
-    """起動時にパージ→ゾンビ巻き戻し→通常起動の順で実行する。"""
+    """起動時にパージ→ゾンビ状態遷移→通常起動の順で実行する。"""
     # 1. 古いジョブのパージ
     purged = self.store.purge_old_jobs(retention_seconds)
 
-    # 2. ゾンビジョブの巻き戻し（pending に戻す or failed にする）
+    # 2. ゾンビジョブの状態遷移（recovering or failed）
     if rollback_fn is not None:
         rollback_fn(self.store)
 
     # 3. 通常起動（既存コード）
     self._running = True
-    # ... → Dispatcher が pending ジョブを通常のrate limitで処理
+    # ... → Dispatcher が recovering ジョブを rate limit 適用の上でディスパッチ
 ```
 
-#### 4.3.3. 巻き戻しロジック
+#### 4.3.3. ゾンビ状態遷移ロジック
 
-`mcp_worker_daemon.py` にゾンビジョブの巻き戻し関数を追加します。
+`mcp_worker_daemon.py` にゾンビジョブの状態遷移関数を追加します。
 
 ```python
 def create_rollback_fn():
-    """ゾンビジョブ巻き戻し関数を作成する。"""
+    """ゾンビジョブ状態遷移関数を作成する。"""
 
     def rollback_stale_jobs(store):
         stale = store.get_stale_jobs(["running", "polling"])
@@ -383,19 +406,79 @@ def create_rollback_fn():
                 store.update_status(job["id"], "failed",
                     error="Worker restarted before submit completed")
             else:
-                # polling → pending に巻き戻し
+                # polling → recovering に変更
                 # session_id, remote_job_id はDB上に保持したまま
-                store.update_status(job["id"], "pending")
+                store.update_status(job["id"], "recovering")
 
     return rollback_stale_jobs
 ```
 
-巻き戻されたジョブは Dispatcher が通常のフローでディスパッチします。`execute_job` は `remote_job_id` の存在を確認し、submit フェーズをスキップして poll+result フェーズから再開します（詳細は 3.6 節参照）。
+#### 4.3.4. Dispatcher の recovering ジョブ対応
+
+`job_queue/dispatcher.py` に recovering ジョブのディスパッチロジックを追加します。
+
+```python
+def dispatch_once(self) -> int:
+    dispatched = 0
+
+    # 1. 通常の pending ジョブのディスパッチ（既存ロジック）
+    endpoints = self.store.get_pending_endpoints()
+    for ep in endpoints:
+        # ... 既存の rate limit チェックとディスパッチ ...
+
+    # 2. recovering ジョブのディスパッチ（追加）
+    recovering_endpoints = self.store.get_recovering_endpoints()
+    for ep in recovering_endpoints:
+        max_concurrent, min_interval = self.config.get_limits(ep)
+
+        # 同じ rate limit チェック
+        if time.monotonic() < self._pause_until.get(ep, 0.0):
+            continue
+        active = self.store.count_active_jobs(ep)
+        if active >= max_concurrent:
+            continue
+        last_run = self._last_run_time.get(ep, 0.0)
+        if (time.monotonic() - last_run) < min_interval:
+            continue
+
+        job = self.store.get_oldest_recovering(ep)
+        if job is None:
+            continue
+
+        # running をスキップし、直接 polling に（submit は行わない）
+        self.store.update_status(job["id"], "polling")
+        self._last_run_time[ep] = time.monotonic()
+        self._pool.submit(self._run_job, job)
+        dispatched += 1
+
+    return dispatched
+```
+
+`job_queue/db.py` に以下のメソッドを追加します。
+
+```python
+def get_recovering_endpoints(self) -> list[str]:
+    """recovering ジョブが存在するエンドポイントのリストを返す。"""
+    cur = self.conn.execute(
+        "SELECT DISTINCT endpoint FROM jobs WHERE status = 'recovering'"
+    )
+    return [row[0] for row in cur.fetchall()]
+
+def get_oldest_recovering(self, endpoint: str) -> dict | None:
+    """指定エンドポイントの最も古い recovering ジョブを返す。"""
+    cur = self.conn.execute(
+        "SELECT * FROM jobs WHERE status = 'recovering' AND endpoint = ? ORDER BY created_at ASC LIMIT 1",
+        (endpoint,),
+    )
+    row = cur.fetchone()
+    return dict(row) if row else None
+```
 
 この設計により：
 - 回復ジョブも `max_concurrent_jobs` と `min_interval_seconds` の制約下で実行される
-- submit の二重実行（二重課金）が発生しない
-- 新規ステータスやセマフォの追加が不要
+- `running` ステータスを経由しない = submit は再実行されない = 二重課金なし
+- `recovering` は active カウント（`running` + `polling`）に含まれない → ディスパッチ時に `polling` にした時点でカウントに入る
+- ステータス遷移が明確: `polling`(ゾンビ) → `recovering` → `polling` → `completed`/`failed`
 
 ### 4.4. 指数バックオフリトライ
 
@@ -642,19 +725,24 @@ else:
   - execute_job の分割、_poll_and_get_result 抽出、_download_results 追加
 ```
 
-### Step 6: ゾンビ巻き戻しと execute_job の回復分岐 (`mcp_worker_daemon.py`)
+### Step 6: ゾンビ回復 — recovering ステータスと Dispatcher 対応
 
-**テスト対象**: `create_rollback_fn()`, `execute_job` の `remote_job_id` 分岐
+**テスト対象**: `create_rollback_fn()`, Dispatcher の recovering ディスパッチ, `execute_job` の `remote_job_id` 分岐
 
 ```
 テスト:
   - running ジョブ（remote_job_id なし）が failed に更新されること
-  - polling ジョブ（remote_job_id あり）が pending に巻き戻されること
-  - 巻き戻されたジョブの session_id, remote_job_id が保持されていること
+  - polling ジョブ（remote_job_id あり）が recovering に更新されること
+  - recovering ジョブの session_id, remote_job_id が保持されていること
+  - Dispatcher が recovering ジョブを rate limit 適用の上でディスパッチすること
+  - Dispatcher が recovering ジョブを polling に更新すること（running をスキップ）
+  - count_active_jobs が recovering を含まないこと
   - execute_job に remote_job_id 付きジョブが渡された場合、submit がスキップされること
   - execute_job に remote_job_id 付きジョブが渡された場合、poll+result から再開されること
 
 実装:
+  - db.py に get_recovering_endpoints(), get_oldest_recovering() 追加
+  - dispatcher.py の dispatch_once() に recovering ディスパッチ追加
   - create_rollback_fn() 追加
   - execute_job の先頭に remote_job_id 存在チェック分岐を追加
   - main() に組み込み
