@@ -75,20 +75,38 @@ class Dispatcher:
         self.job_executor = job_executor
         self.loop_interval = loop_interval
         self._last_run_time: dict[str, float] = {}
+        self._pause_until: dict[str, float] = {}
         self._pool = ThreadPoolExecutor(max_workers=max_workers)
         self._running = False
         self._thread: threading.Thread | None = None
 
+    def pause_endpoint(self, endpoint: str, seconds: float):
+        """Suspend new dispatches to an endpoint for *seconds* seconds."""
+        self._pause_until[endpoint] = time.monotonic() + seconds
+
+    def register_endpoint_limits(
+        self, endpoint: str, max_concurrent: int, min_interval: float
+    ):
+        """Register per-endpoint rate limits in-memory (does not overwrite existing)."""
+        if endpoint not in self.config._endpoint_limits:
+            self.config._endpoint_limits[endpoint] = (max_concurrent, min_interval)
+
     def dispatch_once(self) -> int:
-        """Evaluate all pending endpoints and dispatch eligible jobs.
+        """Evaluate all pending/recovering endpoints and dispatch eligible jobs.
 
         Returns the number of jobs dispatched in this round.
         """
         dispatched = 0
+
+        # --- Phase 1: pending jobs (existing logic) ---
         endpoints = self.store.get_pending_endpoints()
 
         for ep in endpoints:
             max_concurrent, min_interval = self.config.get_limits(ep)
+
+            # Check pause
+            if time.monotonic() < self._pause_until.get(ep, 0.0):
+                continue
 
             # Check concurrency limit
             active = self.store.count_active_jobs(ep)
@@ -119,6 +137,37 @@ class Dispatcher:
                 # After first dispatch, re-check interval for subsequent jobs
                 if min_interval > 0:
                     break  # Must wait for interval before next dispatch
+
+        # --- Phase 2: recovering jobs (zombie recovery) ---
+        recovering_endpoints = self.store.get_recovering_endpoints()
+
+        for ep in recovering_endpoints:
+            max_concurrent, min_interval = self.config.get_limits(ep)
+
+            # Check pause
+            if time.monotonic() < self._pause_until.get(ep, 0.0):
+                continue
+
+            # Check concurrency limit (recovering is NOT counted as active)
+            active = self.store.count_active_jobs(ep)
+            if active >= max_concurrent:
+                continue
+
+            # Check interval limit
+            last_run = self._last_run_time.get(ep, 0.0)
+            now = time.monotonic()
+            if (now - last_run) < min_interval:
+                continue
+
+            job = self.store.get_oldest_recovering(ep)
+            if job is None:
+                continue
+
+            # Transition to polling (skip running — no re-submit)
+            self.store.update_status(job["id"], "polling")
+            self._last_run_time[ep] = time.monotonic()
+            self._pool.submit(self._run_job, job)
+            dispatched += 1
 
         return dispatched
 
