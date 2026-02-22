@@ -322,6 +322,8 @@ Skills are generated to `.claude/skills/<skill-name>/`:
 |--------|---------|
 | `pending`, `queued` | Job waiting |
 | `processing`, `running` | In progress |
+| `polling` | Submitted to remote, polling status |
+| `recovering` | Resuming after worker restart |
 | `completed`, `done`, `success` | Finished |
 | `failed`, `error` | Failed |
 
@@ -349,9 +351,10 @@ print(result["saved_path"])  # Path to downloaded file
 Generated skills include a local queue system that prevents overloading MCP servers when AI agents call tools in parallel.
 
 **How it works:**
-- A local worker daemon accepts job submissions via HTTP and dispatches them with per-endpoint rate limiting
+- A local worker daemon (port 54321) accepts job submissions via HTTP and dispatches them with per-endpoint rate limiting
 - The worker starts automatically on first use and stops after idle timeout (default: 60s)
 - Rate limits are configured per-endpoint in `queue_config.json`
+- Multiple skills share a single worker process and queue directory (`.claude/queue/`)
 
 **Queue modes:**
 
@@ -375,6 +378,14 @@ python mcp_async_call.py --queue-config ../queue_config.json --list --filter-sta
 python mcp_async_call.py --queue-config ../queue_config.json --stats
 ```
 
+**Robustness features:**
+- **Zombie job recovery**: On worker restart, interrupted jobs are automatically recovered (if already submitted to remote MCP) or marked as failed
+- **Exponential backoff retry**: Connection errors and 503/504 responses trigger automatic retry with 2s→4s→8s backoff (max 3 retries)
+- **429 Retry-After**: Respects Retry-After headers and pauses per-endpoint dispatching
+- **Worker-side download**: Result files are downloaded by the worker and saved to `results/{job_id}/`
+- **Old job purge**: Jobs older than retention period (default: 24h) are automatically cleaned up on startup
+- **Config merge protection**: Re-generating a skill preserves user-customized queue_config.json settings
+
 **queue_config.json example:**
 
 ```json
@@ -382,7 +393,9 @@ python mcp_async_call.py --queue-config ../queue_config.json --stats
   "port": 54321,
   "idle_timeout_seconds": 60,
   "default_rate_limit": { "max_concurrent_jobs": 2, "min_interval_seconds": 2.0 },
-  "endpoint_rate_limits": { "http://slow-server:8000": { "max_concurrent_jobs": 1, "min_interval_seconds": 10.0 } }
+  "endpoint_rate_limits": { "http://slow-server:8000": { "max_concurrent_jobs": 1, "min_interval_seconds": 10.0 } },
+  "job_retention_seconds": 86400,
+  "results_dir": ".claude/queue/results"
 }
 ```
 
@@ -393,5 +406,8 @@ The script handles:
 - Job failures (status: failed/error)
 - Timeout after max polls
 - Download failures
+- Connection errors with automatic retry (exponential backoff: 2s→4s→8s)
+- 429 Too Many Requests (respects Retry-After header, capped at 60s)
+- Zombie job recovery on worker restart
 
 All errors raise exceptions with descriptive messages.

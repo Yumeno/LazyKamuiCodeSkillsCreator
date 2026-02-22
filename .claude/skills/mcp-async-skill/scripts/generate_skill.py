@@ -350,6 +350,11 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
                 "--id-param": "ジョブIDパラメータ名 (デフォルト: request_id)",
                 "--save-logs": "{output}/logs/ にログ保存",
                 "--save-logs-inline": "出力ファイル横にログ保存",
+                "--queue-config": "queue_config.jsonへのパス（キューモード有効化）",
+                "--submit-only": "ジョブ投入のみ（job_id即返却）",
+                "--wait JOB_ID": "ジョブ状態確認",
+                "--list": "キュー内ジョブ一覧（JSON出力）",
+                "--stats": "エンドポイント別統計情報",
             },
             "notes": {
                 "execution": "必ずプロジェクトルートから実行すること",
@@ -709,6 +714,11 @@ python .claude/skills/{skill_name}/scripts/mcp_async_call.py \\
 | `--id-param` | - | ジョブIDパラメータ名 | `request_id` |
 | `--save-logs` | - | `{{output}}/logs/` にログ保存 | 無効 |
 | `--save-logs-inline` | - | 出力ファイル横にログ保存 | 無効 |
+| `--queue-config` | - | queue_config.jsonへのパス | ラッパー自動設定 |
+| `--submit-only` | - | ジョブ投入のみ（job_id即返却） | 無効 |
+| `--wait` | - | ジョブ状態確認（JOB_ID指定） | - |
+| `--list` | - | キュー内ジョブ一覧（JSON出力） | - |
+| `--stats` | - | エンドポイント別統計情報 | - |
 
 ### 出力パス決定ルール
 
@@ -833,8 +843,18 @@ This skill includes a local queue system that controls request rates to the MCP 
 - Default (blocking): Submit job → poll until done → return result
 - `--submit-only`: Submit job and return `job_id` immediately
 - `--wait JOB_ID`: Check job status by ID
+- `--list`: List all jobs (with optional `--filter-status`)
+- `--stats`: Show per-endpoint statistics
+
+**Robustness:**
+- Exponential backoff retry on connection errors and 503/504 (2s→4s→8s, max 3 retries)
+- 429 Retry-After header support with per-endpoint pause
+- Zombie job recovery on worker restart (polling jobs with remote_job_id are automatically resumed)
+- Worker-side file download to `results/{{job_id}}/`
+- Old job auto-purge on startup (default retention: 24h)
 
 **Configuration:** Edit `queue_config.json` in the skill root to adjust rate limits.
+Re-generating this skill preserves your customized queue_config.json settings.
 
 **Worker auto-start:** The queue worker starts automatically on first use and stops after idle timeout.
 
