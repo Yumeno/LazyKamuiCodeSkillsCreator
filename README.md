@@ -72,30 +72,42 @@ python scripts/mcp_async_call.py \
 
 ## セットアップ
 
-### 方法A: pip install（推奨）
+### 方法A: curl でインストール（推奨）
 
+プロジェクトルートで実行してください。スキルが `.claude/skills/mcp-async-skill/` に配置されます。
+
+**bash (Linux / macOS / WSL / Git Bash):**
 ```bash
-# 最新版をインストール
-pip install git+https://github.com/Yumeno/LazyKamuiCodeSkillsCreator.git#subdirectory=release/claude
-
-# バージョン指定
-pip install git+https://github.com/Yumeno/LazyKamuiCodeSkillsCreator.git@lazy-v2.0.0#subdirectory=release/claude
+mkdir -p .claude/skills
+curl -fSL -o mcp-async-skill.tar.gz https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/download/lazy-v2.0.0/mcp-async-skill.tar.gz
+tar xzf mcp-async-skill.tar.gz -C .claude/skills/
+rm mcp-async-skill.tar.gz
+pip install pyyaml requests
 ```
 
-インストール後は `generate-skill` コマンドが使えます：
+**PowerShell (Windows):**
+```powershell
+New-Item -ItemType Directory -Force -Path .claude\skills
+curl.exe -fSL -o mcp-async-skill.tar.gz https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/download/lazy-v2.0.0/mcp-async-skill.tar.gz
+tar xzf mcp-async-skill.tar.gz -C .claude\skills\
+Remove-Item mcp-async-skill.tar.gz
+pip install pyyaml requests
+```
+
+インストール後、Claude Code がスキルとして自動認識します。スキル生成は以下のように実行：
 
 ```bash
 # mcp.json内の全サーバーのスキルを生成
-generate-skill -m /path/to/your/.mcp.json
+python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
+  -m /path/to/your/.mcp.json
 
 # 特定のサーバーのみ生成
-generate-skill -m /path/to/your/.mcp.json -s fal-ai/flux-lora
+python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
+  -m /path/to/your/.mcp.json -s fal-ai/flux-lora
 
 # Lazyモードで生成（コンテキスト節約）
-generate-skill -m /path/to/your/.mcp.json --lazy
-
-# python -m でも実行可能
-python -m lazykamui -m /path/to/your/.mcp.json
+python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
+  -m /path/to/your/.mcp.json --lazy
 ```
 
 ### 方法B: git clone（開発者向け）
