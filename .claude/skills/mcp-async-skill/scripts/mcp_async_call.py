@@ -852,6 +852,47 @@ def _queue_blocking(
     )
 
 
+def _ensure_worker_running(
+    url: str,
+    queue_config_path: str | None = None,
+) -> None:
+    """Check if the queue worker is reachable and auto-start it if not.
+
+    Args:
+        url: The worker URL to check (e.g. ``http://127.0.0.1:54321``).
+        queue_config_path: Optional path to ``queue_config.json``, forwarded
+            to the daemon on startup.
+
+    Raises:
+        SystemExit: If the worker cannot be started.
+    """
+    from job_queue.client import is_worker_running, start_worker
+
+    if is_worker_running(url):
+        return
+
+    print("[QUEUE] Worker not running, starting automatically...")
+    worker_script = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "mcp_worker_daemon.py"
+    )
+    # Extract port from URL
+    try:
+        port = int(url.rsplit(":", 1)[-1].rstrip("/"))
+    except (ValueError, IndexError):
+        port = 54321
+
+    started = start_worker(
+        worker_script,
+        config_path=queue_config_path,
+        port=port,
+    )
+    if started:
+        print(f"[QUEUE] Worker started on {url}")
+    else:
+        print("Error: Failed to start worker daemon", file=sys.stderr)
+        sys.exit(1)
+
+
 def route_execution(
     worker_url: str | None,
     queue_config_path: str | None,
@@ -878,6 +919,18 @@ def route_execution(
     """Route execution to queue system or direct MCP call."""
     submit_args = submit_args or {}
     headers = headers or {}
+
+    # Auto-start worker daemon if any queue mode is active
+    needs_worker = bool(
+        worker_url or queue_config_path or list_jobs or show_stats or wait_job_id
+    )
+    if needs_worker:
+        resolved_url = (
+            worker_url
+            or resolve_worker_url(None, queue_config_path)
+            or "http://127.0.0.1:54321"
+        )
+        _ensure_worker_running(resolved_url, queue_config_path)
 
     # --list mode
     if list_jobs:
@@ -1009,22 +1062,25 @@ def main():
 
     # --list mode needs minimal args
     if args.list:
-        worker_url = resolve_worker_url(args.worker_url, args.queue_config)
-        result = _queue_list(worker_url or "http://127.0.0.1:54321", status_filter=args.filter_status)
+        worker_url = resolve_worker_url(args.worker_url, args.queue_config) or "http://127.0.0.1:54321"
+        _ensure_worker_running(worker_url, args.queue_config)
+        result = _queue_list(worker_url, status_filter=args.filter_status)
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return
 
     # --stats mode needs minimal args
     if args.stats:
-        worker_url = resolve_worker_url(args.worker_url, args.queue_config)
-        result = _queue_stats(worker_url or "http://127.0.0.1:54321")
+        worker_url = resolve_worker_url(args.worker_url, args.queue_config) or "http://127.0.0.1:54321"
+        _ensure_worker_running(worker_url, args.queue_config)
+        result = _queue_stats(worker_url)
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return
 
     # --wait mode needs minimal args
     if args.wait:
-        worker_url = resolve_worker_url(args.worker_url, args.queue_config)
-        result = _queue_wait(worker_url or "http://127.0.0.1:54321", args.wait)
+        worker_url = resolve_worker_url(args.worker_url, args.queue_config) or "http://127.0.0.1:54321"
+        _ensure_worker_running(worker_url, args.queue_config)
+        result = _queue_wait(worker_url, args.wait)
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return
 
