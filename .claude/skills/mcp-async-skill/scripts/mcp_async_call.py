@@ -871,7 +871,6 @@ def route_execution(
     auto_filename: bool = False,
     poll_interval: float = 2.0,
     max_polls: int = 300,
-    id_param_name: str = "request_id",
     save_logs_to_dir: bool = False,
     save_logs_inline: bool = False,
 ) -> dict:
@@ -948,7 +947,6 @@ def route_execution(
         poll_interval=poll_interval,
         max_polls=max_polls,
         headers=headers,
-        id_param_name=id_param_name,
         save_logs_to_dir=save_logs_to_dir,
         save_logs_inline=save_logs_inline,
     )
