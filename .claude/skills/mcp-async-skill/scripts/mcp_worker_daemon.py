@@ -27,6 +27,94 @@ from job_queue.dispatcher import QueueConfig
 from job_queue.worker import WorkerApp
 
 
+def _is_retryable(exc, connection_error_cls=None, http_error_cls=None):
+    """Return True if the exception is a retryable transient error.
+
+    Retryable: ConnectionError, HTTP 429/503/504.
+    The cls parameters allow testing without importing requests.
+    """
+    if connection_error_cls is None:
+        import requests
+        connection_error_cls = requests.ConnectionError
+    if http_error_cls is None:
+        import requests
+        http_error_cls = requests.HTTPError
+
+    if isinstance(exc, connection_error_cls):
+        return True
+    if isinstance(exc, http_error_cls) and getattr(exc, "response", None) is not None:
+        return exc.response.status_code in (429, 503, 504)
+    return False
+
+
+def _get_retry_after(exc, http_error_cls=None):
+    """Extract Retry-After header from a 429 response (capped at 60s).
+
+    Returns float seconds or None.
+    """
+    if http_error_cls is None:
+        import requests
+        http_error_cls = requests.HTTPError
+
+    if not isinstance(exc, http_error_cls):
+        return None
+    resp = getattr(exc, "response", None)
+    if resp is None:
+        return None
+    if resp.status_code != 429:
+        return None
+    val = resp.headers.get("Retry-After")
+    if val:
+        try:
+            return min(float(val), 60.0)
+        except ValueError:
+            pass
+    return None
+
+
+def _with_retry(
+    fn,
+    max_retries=3,
+    backoff_base=None,
+    on_retry=None,
+    connection_error_cls=None,
+    http_error_cls=None,
+):
+    """Call fn() with exponential backoff retry on transient errors.
+
+    Args:
+        fn: Zero-arg callable to invoke.
+        max_retries: Maximum number of retries (total attempts = max_retries + 1).
+        backoff_base: List of wait times per attempt [2.0, 4.0, 8.0].
+        on_retry: Optional callback(attempt, exc, wait_seconds) called before each retry.
+        connection_error_cls: Exception class for connection errors (for testing).
+        http_error_cls: Exception class for HTTP errors (for testing).
+
+    Returns:
+        The return value of fn().
+
+    Raises:
+        The last exception if all retries are exhausted or the error is not retryable.
+    """
+    if backoff_base is None:
+        backoff_base = [2.0, 4.0, 8.0]
+
+    for attempt in range(max_retries + 1):
+        try:
+            return fn()
+        except Exception as e:
+            if not _is_retryable(e, connection_error_cls, http_error_cls):
+                raise
+            if attempt >= max_retries:
+                raise
+            wait = _get_retry_after(e, http_error_cls)
+            if wait is None:
+                wait = backoff_base[min(attempt, len(backoff_base) - 1)]
+            if on_retry is not None:
+                on_retry(attempt, e, wait)
+            time.sleep(wait)
+
+
 def create_mcp_job_executor():
     """Create the real job executor that uses MCPAsyncClient."""
     from mcp_async_call import MCPAsyncClient, parse_status_response
