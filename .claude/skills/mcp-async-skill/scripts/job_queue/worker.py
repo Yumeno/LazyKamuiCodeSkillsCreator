@@ -56,26 +56,33 @@ class _RequestHandler(BaseHTTPRequestHandler):
             endpoint_filter = params.get("endpoint", [None])[0]
             limit_str = params.get("limit", [None])[0]
             limit = int(limit_str) if limit_str else None
+            include_args = params.get("include_args", [None])[0] in ("true", "1")
 
             jobs = app.store.get_all_jobs(
                 status=status_filter,
                 endpoint=endpoint_filter,
                 limit=limit,
             )
+            job_list = []
+            for j in jobs:
+                entry = {
+                    "job_id": j["id"],
+                    "endpoint": j["endpoint"],
+                    "submit_tool": j["submit_tool"],
+                    "status": j["status"],
+                    "created_at": j["created_at"],
+                    "updated_at": j["updated_at"],
+                    "error": j["error"],
+                }
+                if include_args:
+                    try:
+                        entry["args"] = json.loads(j["args"])
+                    except (json.JSONDecodeError, TypeError):
+                        entry["args"] = j["args"]
+                job_list.append(entry)
             self._send_json(200, {
                 "total": len(jobs),
-                "jobs": [
-                    {
-                        "job_id": j["id"],
-                        "endpoint": j["endpoint"],
-                        "submit_tool": j["submit_tool"],
-                        "status": j["status"],
-                        "created_at": j["created_at"],
-                        "updated_at": j["updated_at"],
-                        "error": j["error"],
-                    }
-                    for j in jobs
-                ],
+                "jobs": job_list,
             })
             return
 
@@ -85,18 +92,29 @@ class _RequestHandler(BaseHTTPRequestHandler):
             return
 
         if self.path.startswith("/api/jobs/"):
-            job_id = self.path[len("/api/jobs/"):]
+            from urllib.parse import urlparse as _urlparse, parse_qs as _parse_qs
+            _parsed = _urlparse(self.path)
+            job_id = _parsed.path[len("/api/jobs/"):]
+            _params = _parse_qs(_parsed.query)
+            _include_args = _params.get("include_args", [None])[0] in ("true", "1")
+
             job = app.store.get_job(job_id)
             if job is None:
                 self._send_json(404, {"error": "Job not found"})
                 return
-            self._send_json(200, {
+            resp_data = {
                 "job_id": job["id"],
                 "status": job["status"],
                 "result": job["result"],
                 "error": job["error"],
                 "remote_job_id": job["remote_job_id"],
-            })
+            }
+            if _include_args:
+                try:
+                    resp_data["args"] = json.loads(job["args"])
+                except (json.JSONDecodeError, TypeError):
+                    resp_data["args"] = job["args"]
+            self._send_json(200, resp_data)
             return
 
         self._send_json(404, {"error": "Not found"})

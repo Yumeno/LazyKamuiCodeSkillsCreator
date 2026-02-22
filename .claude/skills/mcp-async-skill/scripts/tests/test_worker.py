@@ -517,5 +517,66 @@ class TestResultsDir(unittest.TestCase):
         self.assertIsNone(app.results_dir)
 
 
+class TestIncludeArgs(WorkerTestBase):
+    """GET /api/jobs and /api/jobs/{id} with include_args query param."""
+
+    def test_list_jobs_without_include_args(self):
+        """Default response should NOT contain args field."""
+        requests.post(
+            f"{self.base_url}/api/jobs",
+            json={"endpoint": "http://mcp:8000", "submit_tool": "gen",
+                   "args": {"prompt": "hello"}},
+        )
+        time.sleep(0.3)
+        resp = requests.get(f"{self.base_url}/api/jobs")
+        data = resp.json()
+        self.assertGreaterEqual(len(data["jobs"]), 1)
+        for job in data["jobs"]:
+            self.assertNotIn("args", job)
+
+    def test_list_jobs_with_include_args(self):
+        """include_args=true should add args field to each job."""
+        requests.post(
+            f"{self.base_url}/api/jobs",
+            json={"endpoint": "http://mcp:8000", "submit_tool": "gen",
+                   "args": {"prompt": "world"}},
+        )
+        time.sleep(0.3)
+        resp = requests.get(f"{self.base_url}/api/jobs?include_args=true")
+        data = resp.json()
+        self.assertGreaterEqual(len(data["jobs"]), 1)
+        found = False
+        for job in data["jobs"]:
+            self.assertIn("args", job)
+            if isinstance(job["args"], dict) and job["args"].get("prompt") == "world":
+                found = True
+        self.assertTrue(found, "Expected to find job with prompt='world'")
+
+    def test_single_job_without_include_args(self):
+        """GET /api/jobs/{id} default should NOT contain args."""
+        submit_resp = requests.post(
+            f"{self.base_url}/api/jobs",
+            json={"endpoint": "http://mcp:8000", "submit_tool": "gen",
+                   "args": {"prompt": "test"}},
+        )
+        job_id = submit_resp.json()["job_id"]
+        resp = requests.get(f"{self.base_url}/api/jobs/{job_id}")
+        data = resp.json()
+        self.assertNotIn("args", data)
+
+    def test_single_job_with_include_args(self):
+        """GET /api/jobs/{id}?include_args=true should contain args."""
+        submit_resp = requests.post(
+            f"{self.base_url}/api/jobs",
+            json={"endpoint": "http://mcp:8000", "submit_tool": "gen",
+                   "args": {"prompt": "test_args"}},
+        )
+        job_id = submit_resp.json()["job_id"]
+        resp = requests.get(f"{self.base_url}/api/jobs/{job_id}?include_args=true")
+        data = resp.json()
+        self.assertIn("args", data)
+        self.assertEqual(data["args"]["prompt"], "test_args")
+
+
 if __name__ == "__main__":
     unittest.main()
