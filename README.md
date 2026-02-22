@@ -307,6 +307,7 @@ python scripts/mcp_async_call.py \
 | `--list` | キュー内の全ジョブを一覧（JSON出力） |
 | `--stats` | エンドポイント別統計情報を表示 |
 | `--filter-status` | `--list`使用時にステータスでフィルタ |
+| `--show-args` | `--list` / `--wait` 使用時に元の送信引数を表示 |
 
 **拡張子の決定順序:**
 1. `--output-file` で指定されている場合はその拡張子
@@ -388,6 +389,7 @@ print(result["saved_path"])  # ダウンロードしたファイルへのパス
 - ローカルワーカーデーモン（port 54321）がHTTP APIでジョブを受け付け、エンドポイント別にレートリミットを適用
 - 初回使用時に自動起動、アイドルタイムアウト（デフォルト: 60秒）で自動終了
 - SQLiteでジョブ状態を永続化。複数スキルで共有キューディレクトリ（`.claude/queue/`）を使用
+- ワーカー停止時（アイドルタイムアウト後）でも `--list` / `--stats` / `--wait` はSQLiteから直接読み取りで動作
 
 ### キューモード
 
@@ -406,6 +408,9 @@ python mcp_async_call.py --queue-config ../queue_config.json --list
 
 # エンドポイント別統計
 python mcp_async_call.py --queue-config ../queue_config.json --stats
+
+# 送信引数付きでジョブ一覧
+python mcp_async_call.py --queue-config ../queue_config.json --list --show-args
 ```
 
 ### 堅牢化機能

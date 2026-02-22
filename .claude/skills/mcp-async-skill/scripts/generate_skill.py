@@ -403,8 +403,30 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
                 "--wait JOB_ID": "ジョブ状態確認",
                 "--list": "キュー内ジョブ一覧（JSON出力）",
                 "--stats": "エンドポイント別統計情報",
+                "--filter-status": "ステータスフィルタ（--list使用時）",
+                "--show-args": "送信引数を表示（--list / --wait使用時）",
             },
             "notes": notes_dict,
+            "queue": {
+                "description": "ローカルキューシステムによるレートリミット制御",
+                "modes": {
+                    "default": "submit → poll → download（従来互換）",
+                    "submit_only": "--submit-only でjob_id即返却",
+                    "wait": "--wait JOB_ID でジョブ状態確認",
+                    "list": "--list でジョブ一覧（--filter-status, --show-args 併用可）",
+                    "stats": "--stats でエンドポイント別統計",
+                },
+                "robustness": [
+                    "接続エラー・503/504で指数バックオフリトライ (2s→4s→8s, 最大3回)",
+                    "429 Retry-After ヘッダー対応（エンドポイント単位で一時停止）",
+                    "ワーカー再起動時にゾンビジョブ自動回復（polling+remote_job_id有り→recovering）",
+                    "ワーカー側で結果ファイルをダウンロード (results/{job_id}/)",
+                    "起動時に古いジョブを自動削除（デフォルト保持期間: 24時間）",
+                    "ワーカー停止時は --list/--stats/--wait がSQLiteから直接読み取り",
+                ],
+                "config": "queue_config.json でレートリミット調整可能（スキル再生成時もユーザー設定を保持）",
+                "worker": "初回使用時に自動起動、アイドルタイムアウト（デフォルト60秒）で自動終了",
+            },
         }
 
     # Add tool definitions
@@ -810,6 +832,8 @@ python .claude/skills/{skill_name}/scripts/mcp_async_call.py \\
 | `--wait` | - | ジョブ状態確認（JOB_ID指定） | - |
 | `--list` | - | キュー内ジョブ一覧（JSON出力） | - |
 | `--stats` | - | エンドポイント別統計情報 | - |
+| `--filter-status` | - | `--list` 使用時にステータスでフィルタ | - |
+| `--show-args` | - | `--list` / `--wait` 使用時に送信引数を表示 | - |
 
 ### 出力パス決定ルール
 
@@ -936,6 +960,8 @@ This skill includes a local queue system that controls request rates to the MCP 
 - `--wait JOB_ID`: Check job status by ID
 - `--list`: List all jobs (with optional `--filter-status`)
 - `--stats`: Show per-endpoint statistics
+- `--show-args`: Include original submit args in `--list` / `--wait` output
+- `--filter-status STATUS`: Filter `--list` by job status
 
 **Robustness:**
 - Exponential backoff retry on connection errors and 503/504 (2s→4s→8s, max 3 retries)
@@ -948,6 +974,8 @@ This skill includes a local queue system that controls request rates to the MCP 
 Re-generating this skill preserves your customized queue_config.json settings.
 
 **Worker auto-start:** The queue worker starts automatically on first use and stops after idle timeout.
+
+**SQLite fallback:** When the worker is stopped, `--list`, `--stats`, and `--wait` read directly from SQLite. No need to restart the worker to check job status.
 
 ## References
 
