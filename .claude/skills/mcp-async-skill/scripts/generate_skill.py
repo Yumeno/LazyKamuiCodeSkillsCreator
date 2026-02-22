@@ -375,7 +375,6 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
                 "--poll-interval": "ポーリング間隔秒数 (デフォルト: 2.0)",
                 "--max-polls": "最大ポーリング回数 (デフォルト: 300)",
                 "--header": "カスタムヘッダー追加 (Key:Value形式、複数可)",
-                "--id-param": "ジョブIDパラメータ名 (デフォルト: request_id)",
                 "--save-logs": "{output}/logs/ にログ保存",
                 "--save-logs-inline": "出力ファイル横にログ保存",
                 "--queue-config": "queue_config.jsonへのパス（キューモード有効化）",
@@ -761,7 +760,6 @@ python .claude/skills/{skill_name}/scripts/mcp_async_call.py \\
 | `--poll-interval` | - | ポーリング間隔 (秒) | `2.0` |
 | `--max-polls` | - | 最大ポーリング回数 | `300` |
 | `--header` | - | カスタムヘッダー追加 (`Key:Value`形式、複数可) | - |
-| `--id-param` | - | ジョブIDパラメータ名 | `request_id` |
 | `--save-logs` | - | `{{output}}/logs/` にログ保存 | 無効 |
 | `--save-logs-inline` | - | 出力ファイル横にログ保存 | 無効 |
 | `--queue-config` | - | queue_config.jsonへのパス | ラッパー自動設定 |
@@ -1008,7 +1006,6 @@ def generate_wrapper_script(mcp_config: dict, tools: list[dict], skill_name: str
     """Generate convenience wrapper script that delegates to mcp_async_call.py."""
     endpoint = mcp_config.get("url") or mcp_config.get("endpoint", "")
     pattern = identify_async_pattern(tools)
-    id_param_name = detect_id_param_name(tools)
 
     # Get auth headers for --header arguments
     all_headers = mcp_config.get("all_headers", {})
@@ -1055,7 +1052,6 @@ DEFAULTS = [
     ("--submit-tool", "{pattern['submit'][0] if pattern['submit'] else 'submit'}"),
     ("--status-tool", "{pattern['status'][0] if pattern['status'] else 'status'}"),
     ("--result-tool", "{pattern['result'][0] if pattern['result'] else 'result'}"),
-    ("--id-param", "{id_param_name}"),
     ("--queue-config", os.path.join(os.path.dirname(os.path.dirname(__file__)), "queue_config.json")),
 {header_defaults_str}
 ]
