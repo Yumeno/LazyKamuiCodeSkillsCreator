@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "LazyKamuiCodeSkillsCreator"
+version = "0.0.0"
+description = "MCP Skill Generator for Claude Code — async job pattern (submit/status/result)"
+requires-python = ">=3.9"
+dependencies = ["pyyaml", "requests"]
+license = {text = "MIT"}
+
+[project.scripts]
+generate-skill = "lazykamui.cli:main"
+
+[tool.setuptools]
+packages = ["lazykamui"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+lazykamui = [".claude/**/*"]
