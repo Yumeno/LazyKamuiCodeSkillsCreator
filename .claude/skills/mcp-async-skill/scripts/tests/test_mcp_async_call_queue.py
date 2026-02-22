@@ -131,7 +131,7 @@ class TestRouting(unittest.TestCase):
                 auto_filename=False,
                 poll_interval=2.0,
                 max_polls=300,
-                id_param_name="request_id",
+
                 save_logs_to_dir=False,
                 save_logs_inline=False,
             )
@@ -159,7 +159,7 @@ class TestRouting(unittest.TestCase):
                 auto_filename=False,
                 poll_interval=2.0,
                 max_polls=300,
-                id_param_name="request_id",
+
                 save_logs_to_dir=False,
                 save_logs_inline=False,
             )
@@ -187,7 +187,7 @@ class TestRouting(unittest.TestCase):
                 auto_filename=False,
                 poll_interval=2.0,
                 max_polls=300,
-                id_param_name="request_id",
+
                 save_logs_to_dir=False,
                 save_logs_inline=False,
             )
@@ -214,7 +214,7 @@ class TestRouting(unittest.TestCase):
                 auto_filename=False,
                 poll_interval=2.0,
                 max_polls=300,
-                id_param_name="request_id",
+
                 save_logs_to_dir=False,
                 save_logs_inline=False,
             )
@@ -358,7 +358,7 @@ class TestRouteListStats(unittest.TestCase):
                 auto_filename=False,
                 poll_interval=2.0,
                 max_polls=300,
-                id_param_name="request_id",
+
                 save_logs_to_dir=False,
                 save_logs_inline=False,
             )
@@ -387,7 +387,7 @@ class TestRouteListStats(unittest.TestCase):
                 auto_filename=False,
                 poll_interval=2.0,
                 max_polls=300,
-                id_param_name="request_id",
+
                 save_logs_to_dir=False,
                 save_logs_inline=False,
             )
