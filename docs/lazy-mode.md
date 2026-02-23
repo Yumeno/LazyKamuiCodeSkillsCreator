@@ -178,6 +178,7 @@ _usage:
     output_path: --output の相対パスはカレントディレクトリ基準
     multi_file: 複数URLがある場合は全て自動ダウンロード (連番サフィックス付与)
     extension: 拡張子は --output-file > Content-Type > URL の優先順位で決定
+    max_polls: デフォルト3000回(約100分)。--max-polls で実行時変更可。恒久変更は scripts/job_queue/__init__.py の DEFAULT_MAX_POLLS を編集
 
 flux_lora_submit:
   description: Submit Flux LoRA image generation request

@@ -277,6 +277,20 @@ Main async MCP caller with full flow automation.
 - `--show-args`: Include original submit args in `--list` / `--wait` responses
 - `--blocking`: Submit → poll → download in one step (default, backward compatible)
 
+**Polling Timeout Configuration:**
+
+By default, polling runs up to 3000 times (~100 minutes at `poll_interval=2.0s`). To override:
+
+```bash
+# Per-invocation (CLI)
+python mcp_async_call.py --max-polls 5000 ...
+
+# Per-invocation (Python API)
+result = run_async_mcp_job(..., max_polls=5000)
+```
+
+To change the global default, edit `DEFAULT_MAX_POLLS` in `scripts/job_queue/__init__.py`.
+
 **File Extension Detection:**
 
 Extension is determined in this order:
