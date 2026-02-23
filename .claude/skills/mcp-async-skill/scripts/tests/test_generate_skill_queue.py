@@ -251,7 +251,7 @@ class TestConfigMergeProtection(unittest.TestCase):
             "idle_timeout_seconds": 120,  # User changed from default 60
             "default_rate_limit": {
                 "max_concurrent_jobs": 1,  # User changed from default 2
-                "min_interval_seconds": 5.0,  # User changed from default 2.0
+                "min_interval_seconds": 5.0,  # User changed from default 10.0
             },
             "endpoint_rate_limits": {
                 "http://old-endpoint:8000": {

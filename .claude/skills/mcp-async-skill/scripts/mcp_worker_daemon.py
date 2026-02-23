@@ -211,7 +211,7 @@ def create_mcp_job_executor(results_dir=None):
         results_dir: Directory to save downloaded results. If None, skip downloads.
     """
     def _poll_and_get_result(store, job_id, client, request_id,
-                             status_tool, result_tool):
+                             status_tool, result_tool, on_rate_limit=None):
         """Poll status and retrieve results (shared by new and recovery jobs)."""
         import json as _json
 
@@ -248,7 +248,8 @@ def create_mcp_job_executor(results_dir=None):
         # Get result
         if result_tool:
             result_resp = _with_retry(
-                lambda: client.get_result(result_tool, request_id)
+                lambda: client.get_result(result_tool, request_id),
+                on_retry=on_rate_limit,
             )
             info = _download_results(result_resp, job_id, results_dir)
             store.update_status(
@@ -264,6 +265,7 @@ def create_mcp_job_executor(results_dir=None):
         import json as _json
 
         store = execute_job._store  # injected after creation
+        dispatcher = getattr(execute_job, "_dispatcher", None)
 
         endpoint = job["endpoint"]
         submit_tool = job["submit_tool"]
@@ -274,6 +276,12 @@ def create_mcp_job_executor(results_dir=None):
         if job.get("headers"):
             headers = _json.loads(job["headers"]) if isinstance(job["headers"], str) else job["headers"]
 
+        def _on_rate_limit(attempt, exc, wait):
+            if dispatcher is not None:
+                resp = getattr(exc, "response", None)
+                if resp is not None and getattr(resp, "status_code", 0) == 429:
+                    dispatcher.pause_endpoint(endpoint, wait)
+
         # Recovery path: job already submitted, skip to poll+result
         if job.get("remote_job_id"):
             client = MCPAsyncClient(endpoint, headers)
@@ -281,13 +289,15 @@ def create_mcp_job_executor(results_dir=None):
             _poll_and_get_result(
                 store, job["id"], client, job["remote_job_id"],
                 status_tool, result_tool,
+                on_rate_limit=_on_rate_limit,
             )
             return
 
         # Normal path: submit → poll → result
         client = MCPAsyncClient(endpoint, headers)
         request_id = _with_retry(
-            lambda: client.submit(submit_tool, args)
+            lambda: client.submit(submit_tool, args),
+            on_retry=_on_rate_limit,
         )
         store.update_status(
             job["id"],
@@ -299,6 +309,7 @@ def create_mcp_job_executor(results_dir=None):
         _poll_and_get_result(
             store, job["id"], client, request_id,
             status_tool, result_tool,
+            on_rate_limit=_on_rate_limit,
         )
 
     return execute_job
@@ -367,8 +378,9 @@ def main():
         results_dir=results_dir,
     )
 
-    # Inject store reference into executor
+    # Inject store and dispatcher references into executor
     executor._store = app.store
+    executor._dispatcher = app.dispatcher
 
     print(f"[WORKER] Starting on {config.host}:{config.port}")
     print(f"[WORKER] DB: {db_path}")

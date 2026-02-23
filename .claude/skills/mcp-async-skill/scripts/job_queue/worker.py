@@ -151,7 +151,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 app.dispatcher.register_endpoint_limits(
                     endpoint,
                     rate_limits.get("max_concurrent_jobs", 2),
-                    rate_limits.get("min_interval_seconds", 2.0),
+                    rate_limits.get("min_interval_seconds", 10.0),
                 )
 
             job_id = app.store.insert_job(

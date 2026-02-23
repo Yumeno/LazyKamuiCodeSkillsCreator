@@ -1007,12 +1007,12 @@ def generate_queue_config(endpoint: str) -> dict:
         "idle_timeout_seconds": 60,
         "default_rate_limit": {
             "max_concurrent_jobs": 2,
-            "min_interval_seconds": 2.0,
+            "min_interval_seconds": 10.0,
         },
         "endpoint_rate_limits": {
             endpoint: {
                 "max_concurrent_jobs": 2,
-                "min_interval_seconds": 2.0,
+                "min_interval_seconds": 10.0,
             }
         },
     }
