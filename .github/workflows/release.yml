@@ -76,6 +76,7 @@ jobs:
       - name: Update version in docs
         run: |
           TAG="${{ github.ref_name }}"
+          git fetch origin main
           git checkout main
           sed -i -E "s|releases/download/lazy-v[0-9.]+/|releases/download/${TAG}/|g" README.md docs/release-process.md
           git diff --quiet && exit 0
