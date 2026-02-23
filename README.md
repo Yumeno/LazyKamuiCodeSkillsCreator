@@ -340,6 +340,20 @@ python scripts/mcp_async_call.py \
 | `--filter-status` | `--list`使用時にステータスでフィルタ |
 | `--show-args` | `--list` / `--wait` 使用時に元の送信引数を表示 |
 
+**ポーリングタイムアウトの変更:**
+
+デフォルトでは最大3000回（`poll_interval=2.0s` で約100分）ポーリングします。変更方法:
+
+```bash
+# 実行時に指定（CLI）
+python mcp_async_call.py --max-polls 5000 ...
+
+# Python APIから指定
+result = run_async_mcp_job(..., max_polls=5000)
+```
+
+全体のデフォルト値を恒久的に変更するには `scripts/job_queue/__init__.py` の `DEFAULT_MAX_POLLS` を編集してください。
+
 **拡張子の決定順序:**
 1. `--output-file` で指定されている場合はその拡張子
 2. ダウンロード時の `Content-Type` ヘッダーから推測
