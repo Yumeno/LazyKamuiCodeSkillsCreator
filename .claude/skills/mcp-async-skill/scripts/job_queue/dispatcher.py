@@ -21,7 +21,7 @@ class QueueConfig:
         self.port: int = 54321
         self.idle_timeout: int = 60
         self.default_max_concurrent: int = 2
-        self.default_min_interval: float = 2.0
+        self.default_min_interval: float = 10.0
         self._endpoint_limits: dict[str, tuple[int, float]] = {}
 
     @classmethod

@@ -80,7 +80,7 @@
   "idle_timeout_seconds": 60,
   "default_rate_limit": {
     "max_concurrent_jobs": 2,
-    "min_interval_seconds": 2.0
+    "min_interval_seconds": 10.0
   },
   "results_dir": null,
   "job_retention_seconds": 86400
@@ -98,7 +98,7 @@
   "idle_timeout_seconds": 60,
   "default_rate_limit": {
     "max_concurrent_jobs": 2,
-    "min_interval_seconds": 2.0
+    "min_interval_seconds": 10.0
   },
   "endpoint_rate_limits": {
     "http://fal.ai:8000": {
@@ -578,7 +578,7 @@ if rate_limits and endpoint:
     app.dispatcher.register_endpoint_limits(
         endpoint,
         rate_limits.get("max_concurrent_jobs", 2),
-        rate_limits.get("min_interval_seconds", 2.0),
+        rate_limits.get("min_interval_seconds", 10.0),
     )
 ```
 

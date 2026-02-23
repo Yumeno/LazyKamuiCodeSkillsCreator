@@ -439,7 +439,7 @@ python mcp_async_call.py --queue-config ../queue_config.json --list --show-args
 {
   "port": 54321,
   "idle_timeout_seconds": 60,
-  "default_rate_limit": { "max_concurrent_jobs": 2, "min_interval_seconds": 2.0 },
+  "default_rate_limit": { "max_concurrent_jobs": 2, "min_interval_seconds": 10.0 },
   "endpoint_rate_limits": { "http://slow-server:8000": { "max_concurrent_jobs": 1, "min_interval_seconds": 10.0 } },
   "job_retention_seconds": 86400,
   "results_dir": ".claude/queue/results"
