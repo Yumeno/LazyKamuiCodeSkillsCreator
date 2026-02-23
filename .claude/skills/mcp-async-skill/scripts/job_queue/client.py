@@ -13,6 +13,8 @@ import time
 
 import requests
 
+from job_queue import DEFAULT_MAX_POLLS
+
 
 def is_worker_running(worker_url: str) -> bool:
     """Check if the worker is reachable."""
@@ -107,7 +109,7 @@ def blocking_job(
     headers: dict | None = None,
     rate_limits: dict | None = None,
     poll_interval: float = 2.0,
-    max_polls: int = 300,
+    max_polls: int = DEFAULT_MAX_POLLS,
 ) -> dict:
     """Submit a job, poll until complete, and return the final result.
 

@@ -23,6 +23,7 @@ try:
 except Exception:
     pass
 
+from job_queue import DEFAULT_MAX_POLLS
 from job_queue.dispatcher import QueueConfig
 from job_queue.worker import WorkerApp
 
@@ -218,7 +219,7 @@ def create_mcp_job_executor(results_dir=None):
         if status_tool:
             completed_statuses = {"completed", "done", "success", "finished", "ready"}
             failed_statuses = {"failed", "error", "cancelled", "timeout"}
-            max_polls = 300
+            max_polls = DEFAULT_MAX_POLLS
             poll_interval = 2.0
 
             for _ in range(max_polls):

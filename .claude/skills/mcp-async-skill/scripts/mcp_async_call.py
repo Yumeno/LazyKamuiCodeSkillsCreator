@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from job_queue import DEFAULT_MAX_POLLS
+
 # Force UTF-8 encoding for stdout/stderr/stdin (prevents UnicodeEncodeError on Windows)
 # Python 3.7+ required. errors='backslashreplace' ensures no crash on unencodable chars.
 try:
@@ -578,7 +580,7 @@ def run_async_mcp_job(
     output_file: str | None = None,
     auto_filename: bool = False,
     poll_interval: float = 2.0,
-    max_polls: int = 300,
+    max_polls: int = DEFAULT_MAX_POLLS,
     headers: dict | None = None,
     completed_statuses: list[str] | None = None,
     failed_statuses: list[str] | None = None,
@@ -974,7 +976,7 @@ def _queue_blocking(
     headers: dict | None = None,
     rate_limits: dict | None = None,
     poll_interval: float = 2.0,
-    max_polls: int = 300,
+    max_polls: int = DEFAULT_MAX_POLLS,
 ) -> dict:
     """Submit a job and poll until completion."""
     from job_queue.client import blocking_job
@@ -1052,7 +1054,7 @@ def route_execution(
     output_file: str | None = None,
     auto_filename: bool = False,
     poll_interval: float = 2.0,
-    max_polls: int = 300,
+    max_polls: int = DEFAULT_MAX_POLLS,
     save_logs_to_dir: bool = False,
     save_logs_inline: bool = False,
 ) -> dict:
@@ -1184,7 +1186,7 @@ Examples:
     parser.add_argument("--output-file", "-O", help="Output file path (overrides auto filename)")
     parser.add_argument("--auto-filename", action="store_true", help="Use {request_id}_{timestamp}.{ext} format")
     parser.add_argument("--poll-interval", type=float, default=2.0, help="Poll interval in seconds")
-    parser.add_argument("--max-polls", type=int, default=300, help="Maximum poll attempts")
+    parser.add_argument("--max-polls", type=int, default=DEFAULT_MAX_POLLS, help="Maximum poll attempts (default: %(default)s)")
     parser.add_argument("--header", action="append", help="Add header (format: Key:Value)")
     parser.add_argument("--save-logs", action="store_true", help="Save logs to {output}/logs/")
     parser.add_argument("--save-logs-inline", action="store_true", help="Save logs alongside output file")

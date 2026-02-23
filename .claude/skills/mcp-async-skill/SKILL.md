@@ -262,7 +262,7 @@ Main async MCP caller with full flow automation.
 - `--output-file, -O`: Output file path (overrides auto filename, allows overwrite)
 - `--auto-filename`: Use `{request_id}_{timestamp}.{ext}` format
 - `--poll-interval`: Seconds between polls (default: 2.0)
-- `--max-polls`: Maximum poll attempts (default: 300)
+- `--max-polls`: Maximum poll attempts (default: 3000)
 - `--header`: Add custom header (format: `Key:Value`)
 - `--config, -c`: Load endpoint from .mcp.json
 - `--save-logs`: Save request/response logs to `{output}/logs/`
@@ -276,6 +276,20 @@ Main async MCP caller with full flow automation.
 - `--filter-status`: Filter jobs by status (used with `--list`)
 - `--show-args`: Include original submit args in `--list` / `--wait` responses
 - `--blocking`: Submit → poll → download in one step (default, backward compatible)
+
+**Polling Timeout Configuration:**
+
+By default, polling runs up to 3000 times (~100 minutes at `poll_interval=2.0s`). To override:
+
+```bash
+# Per-invocation (CLI)
+python mcp_async_call.py --max-polls 5000 ...
+
+# Per-invocation (Python API)
+result = run_async_mcp_job(..., max_polls=5000)
+```
+
+To change the global default, edit `DEFAULT_MAX_POLLS` in `scripts/job_queue/__init__.py`.
 
 **File Extension Detection:**
 
@@ -369,7 +383,7 @@ result = run_async_mcp_job(
     result_tool="result",
     output_dir="./output",
     poll_interval=2.0,
-    max_polls=300,
+    max_polls=3000,
 )
 
 print(result["saved_path"])  # Path to downloaded file
