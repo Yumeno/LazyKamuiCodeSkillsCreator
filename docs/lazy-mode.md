@@ -168,7 +168,7 @@ _usage:
     --output-file, -O: 出力ファイルパス (上書き許可)
     --auto-filename: '{request_id}_{timestamp}.{ext} 形式で命名'
     --poll-interval: ポーリング間隔秒数 (デフォルト: 2.0)
-    --max-polls: 最大ポーリング回数 (デフォルト: 300)
+    --max-polls: 最大ポーリング回数 (デフォルト: 3000)
     --header: カスタムヘッダー追加 (Key:Value形式、複数可)
     --id-param: ジョブIDパラメータ名 (デフォルト: request_id)
     --save-logs: '{output}/logs/ にログ保存'

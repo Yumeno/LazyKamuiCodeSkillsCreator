@@ -325,7 +325,7 @@ python scripts/mcp_async_call.py \
 | `--output-file, -O` | 出力ファイルパス（上書き許可、ファイル名のみなら--outputと組み合わせ） |
 | `--auto-filename` | `{request_id}_{timestamp}.{ext}` 形式で自動命名 |
 | `--poll-interval` | ポーリング間隔秒数（デフォルト: 2.0） |
-| `--max-polls` | 最大ポーリング回数（デフォルト: 300） |
+| `--max-polls` | 最大ポーリング回数（デフォルト: 3000） |
 | `--header` | カスタムヘッダー追加（形式: `Key:Value`） |
 | `--config, -c` | .mcp.jsonからエンドポイントを読み込み |
 | `--save-logs` | `{output}/logs/` にリクエスト/レスポンスログを保存 |

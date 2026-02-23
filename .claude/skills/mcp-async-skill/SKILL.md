@@ -262,7 +262,7 @@ Main async MCP caller with full flow automation.
 - `--output-file, -O`: Output file path (overrides auto filename, allows overwrite)
 - `--auto-filename`: Use `{request_id}_{timestamp}.{ext}` format
 - `--poll-interval`: Seconds between polls (default: 2.0)
-- `--max-polls`: Maximum poll attempts (default: 300)
+- `--max-polls`: Maximum poll attempts (default: 3000)
 - `--header`: Add custom header (format: `Key:Value`)
 - `--config, -c`: Load endpoint from .mcp.json
 - `--save-logs`: Save request/response logs to `{output}/logs/`

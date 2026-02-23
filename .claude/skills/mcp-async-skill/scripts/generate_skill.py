@@ -394,7 +394,7 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
                 "--output-file, -O": "出力ファイルパス (上書き許可)",
                 "--auto-filename": "{request_id}_{timestamp}.{ext} 形式で命名",
                 "--poll-interval": "ポーリング間隔秒数 (デフォルト: 2.0)",
-                "--max-polls": "最大ポーリング回数 (デフォルト: 300)",
+                "--max-polls": "最大ポーリング回数 (デフォルト: 3000)",
                 "--header": "カスタムヘッダー追加 (Key:Value形式、複数可)",
                 "--save-logs": "{output}/logs/ にログ保存",
                 "--save-logs-inline": "出力ファイル横にログ保存",
@@ -823,7 +823,7 @@ python .claude/skills/{skill_name}/scripts/mcp_async_call.py \\
 | `--output-file` | `-O` | 出力ファイルパス (上書き許可) | 自動生成 |
 | `--auto-filename` | - | `{{request_id}}_{{timestamp}}.{{ext}}` 形式で命名 | 無効 |
 | `--poll-interval` | - | ポーリング間隔 (秒) | `2.0` |
-| `--max-polls` | - | 最大ポーリング回数 | `300` |
+| `--max-polls` | - | 最大ポーリング回数 | `3000` |
 | `--header` | - | カスタムヘッダー追加 (`Key:Value`形式、複数可) | - |
 | `--save-logs` | - | `{{output}}/logs/` にログ保存 | 無効 |
 | `--save-logs-inline` | - | 出力ファイル横にログ保存 | 無効 |
