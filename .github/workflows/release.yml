@@ -72,3 +72,15 @@ jobs:
             mcp-async-skill.tar.gz \
             --title "$TAG" \
             --notes-file release-notes.md
+
+      - name: Update version in docs
+        run: |
+          TAG="${{ github.ref_name }}"
+          git checkout main
+          sed -i -E "s|releases/download/lazy-v[0-9.]+/|releases/download/${TAG}/|g" README.md docs/release-process.md
+          git diff --quiet && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md docs/release-process.md
+          git commit -m "docs: update download URLs to ${TAG}"
+          git push
