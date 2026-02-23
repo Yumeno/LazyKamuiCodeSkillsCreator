@@ -325,7 +325,7 @@ python scripts/mcp_async_call.py \
 | `--output-file, -O` | 出力ファイルパス（上書き許可、ファイル名のみなら--outputと組み合わせ） |
 | `--auto-filename` | `{request_id}_{timestamp}.{ext}` 形式で自動命名 |
 | `--poll-interval` | ポーリング間隔秒数（デフォルト: 2.0） |
-| `--max-polls` | 最大ポーリング回数（デフォルト: 300） |
+| `--max-polls` | 最大ポーリング回数（デフォルト: 3000） |
 | `--header` | カスタムヘッダー追加（形式: `Key:Value`） |
 | `--config, -c` | .mcp.jsonからエンドポイントを読み込み |
 | `--save-logs` | `{output}/logs/` にリクエスト/レスポンスログを保存 |
@@ -339,6 +339,20 @@ python scripts/mcp_async_call.py \
 | `--stats` | エンドポイント別統計情報を表示 |
 | `--filter-status` | `--list`使用時にステータスでフィルタ |
 | `--show-args` | `--list` / `--wait` 使用時に元の送信引数を表示 |
+
+**ポーリングタイムアウトの変更:**
+
+デフォルトでは最大3000回（`poll_interval=2.0s` で約100分）ポーリングします。変更方法:
+
+```bash
+# 実行時に指定（CLI）
+python mcp_async_call.py --max-polls 5000 ...
+
+# Python APIから指定
+result = run_async_mcp_job(..., max_polls=5000)
+```
+
+全体のデフォルト値を恒久的に変更するには `scripts/job_queue/__init__.py` の `DEFAULT_MAX_POLLS` を編集してください。
 
 **拡張子の決定順序:**
 1. `--output-file` で指定されている場合はその拡張子
@@ -405,7 +419,7 @@ result = run_async_mcp_job(
     result_tool="result",
     output_dir="./output",
     poll_interval=2.0,
-    max_polls=300,
+    max_polls=3000,
 )
 
 print(result["saved_path"])  # ダウンロードしたファイルへのパス

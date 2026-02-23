@@ -1,6 +1,9 @@
 # Claude Code local settings
 .claude/settings.local.json
 
+# Queue runtime data (SQLite DB, results)
+.claude/queue/
+
 # Old directory
 old/
 

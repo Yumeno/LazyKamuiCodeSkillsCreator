@@ -168,7 +168,7 @@ _usage:
     --output-file, -O: 出力ファイルパス (上書き許可)
     --auto-filename: '{request_id}_{timestamp}.{ext} 形式で命名'
     --poll-interval: ポーリング間隔秒数 (デフォルト: 2.0)
-    --max-polls: 最大ポーリング回数 (デフォルト: 300)
+    --max-polls: 最大ポーリング回数 (デフォルト: 3000)
     --header: カスタムヘッダー追加 (Key:Value形式、複数可)
     --id-param: ジョブIDパラメータ名 (デフォルト: request_id)
     --save-logs: '{output}/logs/ にログ保存'
@@ -178,6 +178,7 @@ _usage:
     output_path: --output の相対パスはカレントディレクトリ基準
     multi_file: 複数URLがある場合は全て自動ダウンロード (連番サフィックス付与)
     extension: 拡張子は --output-file > Content-Type > URL の優先順位で決定
+    max_polls: デフォルト3000回(約100分)。--max-polls で実行時変更可。恒久変更は scripts/job_queue/__init__.py の DEFAULT_MAX_POLLS を編集
 
 flux_lora_submit:
   description: Submit Flux LoRA image generation request
