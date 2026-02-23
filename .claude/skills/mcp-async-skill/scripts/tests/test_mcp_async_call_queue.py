@@ -130,7 +130,7 @@ class TestRouting(unittest.TestCase):
                 output_file=None,
                 auto_filename=False,
                 poll_interval=2.0,
-                max_polls=300,
+                max_polls=3000,
 
                 save_logs_to_dir=False,
                 save_logs_inline=False,
@@ -158,7 +158,7 @@ class TestRouting(unittest.TestCase):
                 output_file=None,
                 auto_filename=False,
                 poll_interval=2.0,
-                max_polls=300,
+                max_polls=3000,
 
                 save_logs_to_dir=False,
                 save_logs_inline=False,
@@ -186,7 +186,7 @@ class TestRouting(unittest.TestCase):
                 output_file=None,
                 auto_filename=False,
                 poll_interval=2.0,
-                max_polls=300,
+                max_polls=3000,
 
                 save_logs_to_dir=False,
                 save_logs_inline=False,
@@ -213,7 +213,7 @@ class TestRouting(unittest.TestCase):
                 output_file=None,
                 auto_filename=False,
                 poll_interval=2.0,
-                max_polls=300,
+                max_polls=3000,
 
                 save_logs_to_dir=False,
                 save_logs_inline=False,
@@ -357,7 +357,7 @@ class TestRouteListStats(unittest.TestCase):
                 output_file=None,
                 auto_filename=False,
                 poll_interval=2.0,
-                max_polls=300,
+                max_polls=3000,
 
                 save_logs_to_dir=False,
                 save_logs_inline=False,
@@ -386,7 +386,7 @@ class TestRouteListStats(unittest.TestCase):
                 output_file=None,
                 auto_filename=False,
                 poll_interval=2.0,
-                max_polls=300,
+                max_polls=3000,
 
                 save_logs_to_dir=False,
                 save_logs_inline=False,
@@ -746,7 +746,7 @@ class TestShowArgsFlag(unittest.TestCase):
                 output_file=None,
                 auto_filename=False,
                 poll_interval=2.0,
-                max_polls=300,
+                max_polls=3000,
                 save_logs_to_dir=False,
                 save_logs_inline=False,
             )
@@ -775,7 +775,7 @@ class TestShowArgsFlag(unittest.TestCase):
                 output_file=None,
                 auto_filename=False,
                 poll_interval=2.0,
-                max_polls=300,
+                max_polls=3000,
                 save_logs_to_dir=False,
                 save_logs_inline=False,
             )
@@ -810,7 +810,7 @@ class TestReadOnlyNoAutoStart(unittest.TestCase):
                 output_file=None,
                 auto_filename=False,
                 poll_interval=2.0,
-                max_polls=300,
+                max_polls=3000,
                 save_logs_to_dir=False,
                 save_logs_inline=False,
             )
@@ -837,7 +837,7 @@ class TestReadOnlyNoAutoStart(unittest.TestCase):
                 output_file=None,
                 auto_filename=False,
                 poll_interval=2.0,
-                max_polls=300,
+                max_polls=3000,
                 save_logs_to_dir=False,
                 save_logs_inline=False,
             )
@@ -863,7 +863,7 @@ class TestReadOnlyNoAutoStart(unittest.TestCase):
                 output_file=None,
                 auto_filename=False,
                 poll_interval=2.0,
-                max_polls=300,
+                max_polls=3000,
                 save_logs_to_dir=False,
                 save_logs_inline=False,
             )
