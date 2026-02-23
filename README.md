@@ -405,7 +405,7 @@ result = run_async_mcp_job(
     result_tool="result",
     output_dir="./output",
     poll_interval=2.0,
-    max_polls=300,
+    max_polls=3000,
 )
 
 print(result["saved_path"])  # ダウンロードしたファイルへのパス
