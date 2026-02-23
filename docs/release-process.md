@@ -47,7 +47,7 @@ git push origin lazy-v2.0.0
 # ダウンロード・展開テスト
 mkdir -p /tmp/test-project/.claude/skills
 curl -fSL -o /tmp/mcp-async-skill.tar.gz \
-  https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/download/lazy-v2.1.1/mcp-async-skill.tar.gz
+  https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/download/lazy-v2.1.2/mcp-async-skill.tar.gz
 tar xzf /tmp/mcp-async-skill.tar.gz -C /tmp/test-project/.claude/skills/
 
 # 展開結果の確認
