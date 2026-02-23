@@ -21,7 +21,7 @@ class QueueConfig:
         self.port: int = 54321
         self.idle_timeout: int = 60
         self.default_max_concurrent: int = 2
-        self.default_min_interval: float = 2.0
+        self.default_min_interval: float = 10.0
         self._endpoint_limits: dict[str, tuple[int, float]] = {}
 
     @classmethod
@@ -176,9 +176,27 @@ class Dispatcher:
         try:
             self.job_executor(job)
         except Exception as e:
-            self.store.update_status(
-                job["id"], "failed", error=str(e)
-            )
+            resp = getattr(e, "response", None)
+            if resp is not None and getattr(resp, "status_code", 0) == 429:
+                # Rate limited: requeue instead of failing
+                if job.get("remote_job_id"):
+                    self.store.update_status(job["id"], "recovering")
+                else:
+                    self.store.update_status(job["id"], "pending")
+                # Pause endpoint for Retry-After duration (default 30s)
+                retry_after = None
+                if hasattr(resp, "headers"):
+                    raw = resp.headers.get("Retry-After")
+                    if raw:
+                        try:
+                            retry_after = min(float(raw), 60.0)
+                        except (ValueError, TypeError):
+                            pass
+                self.pause_endpoint(job["endpoint"], retry_after or 30.0)
+            else:
+                self.store.update_status(
+                    job["id"], "failed", error=str(e)
+                )
 
     def start(self):
         """Start the dispatcher loop in a background thread."""
