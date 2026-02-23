@@ -477,7 +477,7 @@ python mcp_async_call.py --queue-config ../queue_config.json --list --show-args
   "idle_timeout_seconds": 60,
   "default_rate_limit": {
     "max_concurrent_jobs": 2,
-    "min_interval_seconds": 2.0
+    "min_interval_seconds": 10.0
   },
   "endpoint_rate_limits": {
     "http://slow-server:8000": {

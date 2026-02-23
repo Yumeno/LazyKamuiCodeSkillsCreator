@@ -136,7 +136,7 @@ $ python mcp_async_call.py --endpoint http://... --submit-tool generate_image --
   "idle_timeout_seconds": 60,
   "default_rate_limit": {
     "max_concurrent_jobs": 2,
-    "min_interval_seconds": 2.0
+    "min_interval_seconds": 10.0
   },
   "endpoint_rate_limits": {
     "http://localhost:8000": {
