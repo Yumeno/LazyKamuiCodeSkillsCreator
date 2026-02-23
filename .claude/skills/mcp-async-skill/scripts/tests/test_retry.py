@@ -242,5 +242,38 @@ class TestWithRetry(unittest.TestCase):
         self.assertEqual(retry_info[1]["attempt"], 1)
 
 
+    def test_on_retry_callback_called_on_429(self):
+        """Verify on_retry receives correct args when a 429 triggers retry."""
+        resp = _FakeResponse(429, headers={"Retry-After": "10"})
+        retry_info = []
+
+        def on_retry(attempt, exc, wait):
+            retry_info.append({
+                "attempt": attempt,
+                "status_code": exc.response.status_code,
+                "wait": wait,
+            })
+
+        call_count = [0]
+
+        def failing_then_ok():
+            call_count[0] += 1
+            if call_count[0] < 2:
+                raise _FakeHTTPError(response=resp)
+            return "ok"
+
+        result = _with_retry(
+            failing_then_ok, max_retries=3,
+            backoff_base=[0.01, 0.01, 0.01],
+            on_retry=on_retry,
+            connection_error_cls=_FakeConnectionError,
+            http_error_cls=_FakeHTTPError,
+        )
+        self.assertEqual(result, "ok")
+        self.assertEqual(len(retry_info), 1)
+        self.assertEqual(retry_info[0]["status_code"], 429)
+        self.assertEqual(retry_info[0]["wait"], 10.0)  # Retry-After header
+
+
 if __name__ == "__main__":
     unittest.main()
