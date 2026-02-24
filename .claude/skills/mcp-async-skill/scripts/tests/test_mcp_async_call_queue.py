@@ -99,10 +99,11 @@ class TestResolveWorkerUrl(unittest.TestCase):
         os.unlink(f.name)
         self.assertEqual(url, "http://127.0.0.1:12345")
 
-    def test_resolve_default_none(self):
+    def test_resolve_default_returns_default_url(self):
+        """No args → returns default worker URL (direct mode removed)."""
         from mcp_async_call import resolve_worker_url
         url = resolve_worker_url(worker_url=None, queue_config_path=None)
-        self.assertIsNone(url)
+        self.assertEqual(url, "http://127.0.0.1:54321")
 
 
 # ── 5-3. Routing Logic ─────────────────────────────────────────────────
@@ -110,10 +111,11 @@ class TestResolveWorkerUrl(unittest.TestCase):
 class TestRouting(unittest.TestCase):
     """Queue mode routing: direct vs submit-only vs wait vs blocking."""
 
-    def test_route_direct_mode_without_queue(self):
-        """No queue args → run_async_mcp_job is called."""
+    def test_route_without_queue_args_uses_queue_blocking(self):
+        """No queue args → queue blocking mode (direct mode removed)."""
         from mcp_async_call import route_execution
-        with mock.patch("mcp_async_call.run_async_mcp_job") as m:
+        with mock.patch("mcp_async_call._queue_blocking") as m, \
+             mock.patch("mcp_async_call._ensure_worker_running"):
             m.return_value = {"status": "completed"}
             result = route_execution(
                 worker_url=None,
