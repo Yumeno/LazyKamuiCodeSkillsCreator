@@ -398,7 +398,7 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
                 "--header": "カスタムヘッダー追加 (Key:Value形式、複数可)",
                 "--save-logs": "{output}/logs/ にログ保存",
                 "--save-logs-inline": "出力ファイル横にログ保存",
-                "--queue-config": "queue_config.jsonへのパス（キューモード有効化）",
+                "--queue-config": "queue_config.jsonへのパス（未指定時は自動探索。全実行はキューシステム経由）",
                 "--submit-only": "ジョブ投入のみ（job_id即返却）",
                 "--wait JOB_ID": "ジョブ状態確認",
                 "--list": "キュー内ジョブ一覧（JSON出力）",
@@ -827,7 +827,7 @@ python .claude/skills/{skill_name}/scripts/mcp_async_call.py \\
 | `--header` | - | カスタムヘッダー追加 (`Key:Value`形式、複数可) | - |
 | `--save-logs` | - | `{{output}}/logs/` にログ保存 | 無効 |
 | `--save-logs-inline` | - | 出力ファイル横にログ保存 | 無効 |
-| `--queue-config` | - | queue_config.jsonへのパス | ラッパー自動設定 |
+| `--queue-config` | - | queue_config.jsonへのパス（未指定時は自動探索） | ラッパー自動設定 |
 | `--submit-only` | - | ジョブ投入のみ（job_id即返却） | 無効 |
 | `--wait` | - | ジョブ状態確認（JOB_ID指定） | - |
 | `--list` | - | キュー内ジョブ一覧（JSON出力） | - |
