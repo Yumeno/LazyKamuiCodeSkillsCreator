@@ -330,7 +330,7 @@ python scripts/mcp_async_call.py \
 | `--config, -c` | .mcp.jsonからエンドポイントを読み込み |
 | `--save-logs` | `{output}/logs/` にリクエスト/レスポンスログを保存 |
 | `--save-logs-inline` | 出力ファイルと同じ場所に `{filename}_*.json` 形式でログ保存 |
-| `--queue-config` | queue_config.jsonへのパス（キューモード有効化） |
+| `--queue-config` | queue_config.jsonへのパス（未指定時は自動探索。全実行はキューシステム経由） |
 | `--worker-url` | ワーカーURL（デフォルト: queue_config.jsonから取得） |
 | `--submit-only` | ジョブをキューに投入し `job_id` を返して即終了 |
 | `--wait JOB_ID` | 指定ジョブの状態を1回確認して返却 |
@@ -427,7 +427,7 @@ print(result["saved_path"])  # ダウンロードしたファイルへのパス
 
 ## キューシステム
 
-生成されたスキルには、AIエージェントが並列にツールを呼び出した際のMCPサーバー過負荷を防ぐローカルキューシステムが含まれます。
+すべての実行はキューシステムを経由します。直接実行モードは廃止されました。`queue_config.json` は `--queue-config` 未指定時でも自動探索されます。
 
 ### 仕組み
 

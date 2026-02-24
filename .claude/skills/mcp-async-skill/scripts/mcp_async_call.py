@@ -757,13 +757,40 @@ def load_mcp_config(config_path: str) -> dict:
         return json.load(f)
 
 
+def _find_queue_config() -> str | None:
+    """Auto-discover queue_config.json by searching upward from the script.
+
+    Search order:
+      1. Script's parent directory (skill_dir/scripts/ -> skill_dir/)
+      2. Project root (directory containing .claude/)
+
+    Returns the path if found, None otherwise.
+    """
+    from mcp_worker_daemon import find_project_root
+
+    # Search from script's parent dir (typical: skill_dir/scripts/mcp_async_call.py)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    skill_dir = os.path.dirname(script_dir)
+    candidate = os.path.join(skill_dir, "queue_config.json")
+    if os.path.exists(candidate):
+        return candidate
+
+    # Search from project root
+    project_root = find_project_root(script_dir)
+    candidate = os.path.join(project_root, "queue_config.json")
+    if os.path.exists(candidate):
+        return candidate
+
+    return None
+
+
 def resolve_worker_url(
     worker_url: str | None = None,
     queue_config_path: str | None = None,
 ) -> str | None:
     """Resolve the worker URL from explicit arg or queue config file.
 
-    Returns None if neither is provided (direct execution mode).
+    Returns the default URL if no config is available.
     """
     if worker_url:
         return worker_url
@@ -776,7 +803,8 @@ def resolve_worker_url(
     if queue_config_path:
         # Config path specified but file doesn't exist yet; use defaults
         return "http://127.0.0.1:54321"
-    return None
+    # No config at all; return default
+    return "http://127.0.0.1:54321"
 
 
 def _queue_submit_only(
@@ -1058,7 +1086,11 @@ def route_execution(
     save_logs_to_dir: bool = False,
     save_logs_inline: bool = False,
 ) -> dict:
-    """Route execution to queue system or direct MCP call."""
+    """Route execution to queue system.
+
+    All execution goes through the queue system for rate limiting.
+    Direct execution mode has been removed.
+    """
     submit_args = submit_args or {}
     headers = headers or {}
 
@@ -1066,93 +1098,64 @@ def route_execution(
     # the worker; they fall back to SQLite when the worker is unreachable.
     is_read_only = bool(list_jobs or show_stats or wait_job_id)
 
+    # Resolve worker URL (always available — defaults to http://127.0.0.1:54321)
+    url = worker_url or resolve_worker_url(None, queue_config_path)
+
     # Auto-start worker daemon only for write operations
-    needs_worker = bool(
-        (worker_url or queue_config_path) and not is_read_only
-    )
-    if needs_worker:
-        resolved_url = (
-            worker_url
-            or resolve_worker_url(None, queue_config_path)
-            or "http://127.0.0.1:54321"
-        )
-        _ensure_worker_running(resolved_url, queue_config_path)
+    if not is_read_only:
+        _ensure_worker_running(url, queue_config_path)
 
     # --list mode
     if list_jobs:
-        url = worker_url or resolve_worker_url(None, queue_config_path) or "http://127.0.0.1:54321"
         return _queue_list(url, status_filter=filter_status,
                            include_args=show_args,
                            queue_config_path=queue_config_path)
 
     # --stats mode
     if show_stats:
-        url = worker_url or resolve_worker_url(None, queue_config_path) or "http://127.0.0.1:54321"
         return _queue_stats(url, queue_config_path=queue_config_path)
 
     # --wait mode
     if wait_job_id:
-        url = worker_url or resolve_worker_url(None, queue_config_path) or "http://127.0.0.1:54321"
         return _queue_wait(url, wait_job_id, include_args=show_args,
                            queue_config_path=queue_config_path)
 
-    # Queue mode (--queue-config or --worker-url provided)
-    if worker_url or queue_config_path:
-        url = worker_url or resolve_worker_url(None, queue_config_path)
+    # Read endpoint rate limits from skill config if available
+    rate_limits = None
+    if queue_config_path and os.path.exists(queue_config_path) and endpoint:
+        try:
+            with open(queue_config_path, encoding="utf-8") as f:
+                skill_config = json.load(f)
+            ep_limits = skill_config.get("endpoint_rate_limits", {}).get(endpoint)
+            if ep_limits:
+                rate_limits = ep_limits
+        except (json.JSONDecodeError, OSError):
+            pass
 
-        # Read endpoint rate limits from skill config if available
-        rate_limits = None
-        if queue_config_path and os.path.exists(queue_config_path) and endpoint:
-            try:
-                with open(queue_config_path, encoding="utf-8") as f:
-                    skill_config = json.load(f)
-                ep_limits = skill_config.get("endpoint_rate_limits", {}).get(endpoint)
-                if ep_limits:
-                    rate_limits = ep_limits
-            except (json.JSONDecodeError, OSError):
-                pass
-
-        if submit_only:
-            return _queue_submit_only(
-                worker_url=url,
-                endpoint=endpoint,
-                submit_tool=submit_tool,
-                submit_args=submit_args,
-                status_tool=status_tool,
-                result_tool=result_tool,
-                headers=headers if headers != {"Content-Type": "application/json"} else None,
-                rate_limits=rate_limits,
-            )
-        else:
-            return _queue_blocking(
-                worker_url=url,
-                endpoint=endpoint,
-                submit_tool=submit_tool,
-                submit_args=submit_args,
-                status_tool=status_tool,
-                result_tool=result_tool,
-                headers=headers if headers != {"Content-Type": "application/json"} else None,
-                rate_limits=rate_limits,
-                poll_interval=poll_interval,
-                max_polls=max_polls,
-            )
-
-    # Direct execution mode (backward compatible)
-    return run_async_mcp_job(
-        endpoint=endpoint,
-        submit_tool=submit_tool,
-        submit_args=submit_args,
-        status_tool=status_tool,
-        result_tool=result_tool,
-        output_dir=output_dir,
-        output_file=output_file,
-        auto_filename=auto_filename,
-        poll_interval=poll_interval,
-        max_polls=max_polls,
-        headers=headers,
-        save_logs_to_dir=save_logs_to_dir,
-        save_logs_inline=save_logs_inline,
-    )
+    if submit_only:
+        return _queue_submit_only(
+            worker_url=url,
+            endpoint=endpoint,
+            submit_tool=submit_tool,
+            submit_args=submit_args,
+            status_tool=status_tool,
+            result_tool=result_tool,
+            headers=headers if headers != {"Content-Type": "application/json"} else None,
+            rate_limits=rate_limits,
+        )
+    else:
+        return _queue_blocking(
+            worker_url=url,
+            endpoint=endpoint,
+            submit_tool=submit_tool,
+            submit_args=submit_args,
+            status_tool=status_tool,
+            result_tool=result_tool,
+            headers=headers if headers != {"Content-Type": "application/json"} else None,
+            rate_limits=rate_limits,
+            poll_interval=poll_interval,
+            max_polls=max_polls,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1161,18 +1164,21 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run async MCP job",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+All execution goes through the queue system for rate limiting.
+queue_config.json is auto-discovered if --queue-config is not specified.
+
 Examples:
-  # Basic usage (directory output, auto filename)
-  python mcp_async_call.py --endpoint "..." --submit-tool "..." --output ./results/
+  # Submit only (queue_config.json auto-discovered)
+  python mcp_async_call.py --endpoint "..." --submit-tool "..." --submit-only --args '{...}'
 
-  # Queue mode: submit only
-  python mcp_async_call.py --queue-config queue_config.json --submit-only --submit-tool "..." --args '{...}'
+  # Blocking (submit + poll until done)
+  python mcp_async_call.py --endpoint "..." --submit-tool "..." --args '{...}'
 
-  # Queue mode: check job status
-  python mcp_async_call.py --queue-config queue_config.json --wait JOB_ID
-
-  # Queue mode: blocking (submit + poll until done)
+  # Explicit queue config
   python mcp_async_call.py --queue-config queue_config.json --submit-tool "..." --args '{...}'
+
+  # Check job status
+  python mcp_async_call.py --wait JOB_ID
 """
     )
     parser.add_argument("--config", "-c", help="Path to .mcp.json config file")
@@ -1193,7 +1199,7 @@ Examples:
 
     # Queue system options
     queue_group = parser.add_argument_group("Queue system")
-    queue_group.add_argument("--queue-config", help="Path to queue_config.json (enables queue mode)")
+    queue_group.add_argument("--queue-config", help="Path to queue_config.json (auto-discovered if not specified)")
     queue_group.add_argument("--worker-url", help="Worker URL (default: from queue config or http://127.0.0.1:54321)")
     queue_group.add_argument("--submit-only", action="store_true", help="Submit job and return job_id immediately")
     queue_group.add_argument("--wait", metavar="JOB_ID", help="Query job status by ID")
@@ -1239,13 +1245,11 @@ def main():
     if not args.submit_tool:
         parser.error("--submit-tool is required (unless using --wait)")
 
-    # Direct mode requires status-tool and result-tool
-    is_queue_mode = bool(args.queue_config or args.worker_url)
-    if not is_queue_mode:
-        if not args.status_tool:
-            parser.error("--status-tool is required for direct mode (use --queue-config for queue mode)")
-        if not args.result_tool:
-            parser.error("--result-tool is required for direct mode (use --queue-config for queue mode)")
+    # Auto-discover queue_config.json if not explicitly provided
+    if not args.queue_config and not args.worker_url:
+        auto_config = _find_queue_config()
+        if auto_config:
+            args.queue_config = auto_config
 
     # Load config
     endpoint = args.endpoint
