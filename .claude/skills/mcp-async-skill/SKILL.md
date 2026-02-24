@@ -267,7 +267,7 @@ Main async MCP caller with full flow automation.
 - `--config, -c`: Load endpoint from .mcp.json
 - `--save-logs`: Save request/response logs to `{output}/logs/`
 - `--save-logs-inline`: Save logs alongside output file as `{filename}_*.json`
-- `--queue-config`: Path to queue_config.json (enables queue mode with rate limiting)
+- `--queue-config`: Path to queue_config.json (auto-discovered if not specified; all execution uses queue system)
 - `--worker-url`: Worker URL (default: from queue config)
 - `--submit-only`: Submit job to queue and return `job_id` immediately
 - `--wait JOB_ID`: Check job status once and return immediately
@@ -391,12 +391,12 @@ print(result["saved_path"])  # Path to downloaded file
 
 ## Queue System (Rate Limiting)
 
-Generated skills include a local queue system that prevents overloading MCP servers when AI agents call tools in parallel.
+All execution goes through a local queue system that prevents overloading MCP servers. Direct execution mode is not available.
 
 **How it works:**
 - A local worker daemon (port 54321) accepts job submissions via HTTP and dispatches them with per-endpoint rate limiting
 - The worker starts automatically on first use and stops after idle timeout (default: 60s)
-- Rate limits are configured per-endpoint in `queue_config.json`
+- Rate limits are configured per-endpoint in `queue_config.json` (auto-discovered if `--queue-config` is not specified)
 - Multiple skills share a single worker process and queue directory (`.claude/queue/`)
 - When the worker is stopped (idle timeout), `--list`, `--stats`, and `--wait` automatically fall back to reading from SQLite (`jobs.db`), so job data remains accessible without restarting the worker
 
