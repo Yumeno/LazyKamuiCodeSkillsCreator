@@ -153,12 +153,12 @@ _usage:
       --status-tool "flux_lora_status" \
       --result-tool "flux_lora_result" \
       --args '{"prompt": "your input here"}' \
-      --header "Authorization:Bearer xxx" \
+      --config .claude/skills/flux-lora/references/mcp.json \
       --output ./output
   wrapper: python .claude/skills/flux-lora/scripts/flux_lora.py --args '{"prompt": "..."}'
   options:
     --endpoint, -e: MCPサーバーのエンドポイントURL
-    --config, -c: .mcp.jsonからエンドポイントを読み込み
+    --config, -c: .mcp.jsonからエンドポイントと認証ヘッダーを読み込み（未指定時はreferences/mcp.jsonを自動探索）
     --submit-tool: ジョブ送信用ツール名 (必須)
     --status-tool: ステータス確認用ツール名 (必須)
     --result-tool: 結果取得用ツール名 (必須)
@@ -169,7 +169,6 @@ _usage:
     --auto-filename: '{request_id}_{timestamp}.{ext} 形式で命名'
     --poll-interval: ポーリング間隔秒数 (デフォルト: 2.0)
     --max-polls: 最大ポーリング回数 (デフォルト: 3000)
-    --header: カスタムヘッダー追加 (Key:Value形式、複数可)
     --id-param: ジョブIDパラメータ名 (デフォルト: request_id)
     --save-logs: '{output}/logs/ にログ保存'
     --save-logs-inline: 出力ファイル横にログ保存

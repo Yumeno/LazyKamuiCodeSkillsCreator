@@ -752,9 +752,89 @@ def run_async_mcp_job(
 
 
 def load_mcp_config(config_path: str) -> dict:
-    """Load .mcp.json configuration."""
-    with open(config_path) as f:
-        return json.load(f)
+    """Load .mcp.json configuration.
+
+    Supports formats:
+    1. Direct: {"name": "...", "url": "...", ...}
+    2. mcpServers wrapper: {"mcpServers": {"name": {...}}}
+    """
+    with open(config_path, encoding='utf-8') as f:
+        data = json.load(f)
+
+    # Handle mcpServers wrapper format
+    if "mcpServers" in data:
+        servers = data["mcpServers"]
+        if isinstance(servers, dict) and servers:
+            server_name = next(iter(servers))
+            server_config = servers[server_name]
+            result = {"name": server_name, **server_config}
+            if "headers" in result:
+                headers = result.pop("headers")
+                if isinstance(headers, dict) and headers:
+                    first_key = next(iter(headers))
+                    result["auth_header"] = first_key
+                    result["auth_value"] = headers[first_key]
+                    result["all_headers"] = headers
+            return result
+
+    return data
+
+
+def _find_mcp_config() -> str | None:
+    """Auto-discover references/mcp.json by searching from the skill directory.
+
+    Search order:
+      1. Skill's references/ directory (skill_dir/references/mcp.json)
+      2. Project root references/ directory
+
+    Returns the path if found, None otherwise.
+    """
+    from mcp_worker_daemon import find_project_root
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    skill_dir = os.path.dirname(script_dir)
+
+    # Search skill_dir/references/mcp.json
+    candidate = os.path.join(skill_dir, "references", "mcp.json")
+    if os.path.exists(candidate):
+        return candidate
+
+    # Search project root
+    project_root = find_project_root(script_dir)
+    candidate = os.path.join(project_root, "references", "mcp.json")
+    if os.path.exists(candidate):
+        return candidate
+
+    return None
+
+
+def _extract_headers_from_config(config: dict) -> dict[str, str]:
+    """Extract HTTP headers from a loaded MCP config dict.
+
+    Supports three formats:
+    - ``all_headers`` dict (mcpServers flattened by load_mcp_config)
+    - ``headers`` dict (raw mcpServers format, if not yet flattened)
+    - ``auth_header`` / ``auth_value`` pair (legacy)
+
+    Returns a dict of header key→value pairs (may contain ${VAR} placeholders).
+    """
+    # 1. all_headers (from load_mcp_config mcpServers flattening)
+    all_headers = config.get("all_headers")
+    if all_headers and isinstance(all_headers, dict):
+        return dict(all_headers)
+
+    # 2. headers dict (raw format)
+    headers = config.get("headers")
+    if headers and isinstance(headers, dict):
+        return dict(headers)
+
+    # 3. auth_header / auth_value pair (legacy)
+    auth_header = config.get("auth_header")
+    auth_value = config.get("auth_value")
+    if auth_header and auth_value:
+        return {auth_header: auth_value}
+
+    return {}
 
 
 def _find_queue_config() -> str | None:
@@ -1181,7 +1261,7 @@ Examples:
   python mcp_async_call.py --wait JOB_ID
 """
     )
-    parser.add_argument("--config", "-c", help="Path to .mcp.json config file")
+    parser.add_argument("--config", "-c", help="Path to .mcp.json config file (also used for auth headers; auto-discovered from references/mcp.json if not specified)")
     parser.add_argument("--endpoint", "-e", help="MCP server endpoint URL")
     parser.add_argument("--submit-tool", help="Submit tool name")
     parser.add_argument("--status-tool", help="Status tool name")
@@ -1193,7 +1273,6 @@ Examples:
     parser.add_argument("--auto-filename", action="store_true", help="Use {request_id}_{timestamp}.{ext} format")
     parser.add_argument("--poll-interval", type=float, default=2.0, help="Poll interval in seconds")
     parser.add_argument("--max-polls", type=int, default=DEFAULT_MAX_POLLS, help="Maximum poll attempts (default: %(default)s)")
-    parser.add_argument("--header", action="append", help="Add header (format: Key:Value)")
     parser.add_argument("--save-logs", action="store_true", help="Save logs to {output}/logs/")
     parser.add_argument("--save-logs-inline", action="store_true", help="Save logs alongside output file")
 
@@ -1251,22 +1330,26 @@ def main():
         if auto_config:
             args.queue_config = auto_config
 
-    # Load config
+    # Auto-discover mcp.json config if not explicitly provided
+    config_path = args.config
+    if not config_path:
+        config_path = _find_mcp_config()
+
+    # Load config and extract endpoint + headers
     endpoint = args.endpoint
-    if args.config:
-        config = load_mcp_config(args.config)
+    config = {}
+    if config_path:
+        config = load_mcp_config(config_path)
         endpoint = endpoint or config.get("url") or config.get("endpoint")
 
     if not endpoint:
         print("Error: Endpoint URL required (--endpoint or in --config)", file=sys.stderr)
         sys.exit(1)
 
-    # Parse headers
+    # Extract headers from config (replaces old --header CLI option)
     headers = {"Content-Type": "application/json"}
-    if args.header:
-        for h in args.header:
-            key, val = h.split(":", 1)
-            headers[key.strip()] = val.strip()
+    config_headers = _extract_headers_from_config(config)
+    headers.update(config_headers)
 
     # Resolve ${VAR_NAME} placeholders in header values
     headers = resolve_header_placeholders(headers)
