@@ -983,5 +983,151 @@ class TestFindProjectRoot(unittest.TestCase):
         self.assertEqual(os.path.normpath(result), os.path.normpath(nested))
 
 
+# ── 5-10. load_mcp_config() with mcpServers format ───────────────────
+
+class TestLoadMcpConfig(unittest.TestCase):
+    """load_mcp_config() handles both direct and mcpServers formats."""
+
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write_config(self, data: dict) -> str:
+        path = os.path.join(self.tmpdir, "mcp.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        return path
+
+    def test_direct_format(self):
+        from mcp_async_call import load_mcp_config
+        path = self._write_config({"name": "test", "url": "http://x:8000"})
+        cfg = load_mcp_config(path)
+        self.assertEqual(cfg["name"], "test")
+        self.assertEqual(cfg["url"], "http://x:8000")
+
+    def test_mcpservers_format(self):
+        from mcp_async_call import load_mcp_config
+        path = self._write_config({
+            "mcpServers": {
+                "my-server": {
+                    "url": "http://x:8000/sse",
+                    "headers": {"Authorization": "Bearer ${API_KEY}"}
+                }
+            }
+        })
+        cfg = load_mcp_config(path)
+        self.assertEqual(cfg["name"], "my-server")
+        self.assertEqual(cfg["url"], "http://x:8000/sse")
+        self.assertEqual(cfg["auth_header"], "Authorization")
+        self.assertEqual(cfg["auth_value"], "Bearer ${API_KEY}")
+        self.assertEqual(cfg["all_headers"]["Authorization"], "Bearer ${API_KEY}")
+
+    def test_mcpservers_no_headers(self):
+        from mcp_async_call import load_mcp_config
+        path = self._write_config({
+            "mcpServers": {
+                "no-auth": {"url": "http://x:8000/sse"}
+            }
+        })
+        cfg = load_mcp_config(path)
+        self.assertEqual(cfg["name"], "no-auth")
+        self.assertNotIn("auth_header", cfg)
+
+
+# ── 5-11. _extract_headers_from_config() ─────────────────────────────
+
+class TestExtractHeadersFromConfig(unittest.TestCase):
+    """_extract_headers_from_config() extracts headers from various formats."""
+
+    def test_all_headers_format(self):
+        from mcp_async_call import _extract_headers_from_config
+        config = {"all_headers": {"X-Key": "val1", "Authorization": "Bearer tok"}}
+        result = _extract_headers_from_config(config)
+        self.assertEqual(result, {"X-Key": "val1", "Authorization": "Bearer tok"})
+
+    def test_headers_dict_format(self):
+        from mcp_async_call import _extract_headers_from_config
+        config = {"headers": {"Authorization": "Bearer ${KEY}"}}
+        result = _extract_headers_from_config(config)
+        self.assertEqual(result, {"Authorization": "Bearer ${KEY}"})
+
+    def test_auth_header_value_pair(self):
+        from mcp_async_call import _extract_headers_from_config
+        config = {"auth_header": "X-Auth", "auth_value": "secret"}
+        result = _extract_headers_from_config(config)
+        self.assertEqual(result, {"X-Auth": "secret"})
+
+    def test_empty_config(self):
+        from mcp_async_call import _extract_headers_from_config
+        result = _extract_headers_from_config({})
+        self.assertEqual(result, {})
+
+    def test_all_headers_takes_priority(self):
+        from mcp_async_call import _extract_headers_from_config
+        config = {
+            "all_headers": {"X-Key": "from-all"},
+            "headers": {"X-Key": "from-headers"},
+            "auth_header": "X-Key",
+            "auth_value": "from-legacy",
+        }
+        result = _extract_headers_from_config(config)
+        self.assertEqual(result, {"X-Key": "from-all"})
+
+
+# ── 5-12. _find_mcp_config() ─────────────────────────────────────────
+
+class TestFindMcpConfig(unittest.TestCase):
+    """_find_mcp_config() auto-discovers references/mcp.json."""
+
+    def setUp(self):
+        import tempfile
+        self.tmpdir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_finds_references_mcp_json(self):
+        from mcp_async_call import _find_mcp_config
+        # Create skill_dir/references/mcp.json
+        skill_dir = os.path.join(self.tmpdir, "my-skill")
+        scripts_dir = os.path.join(skill_dir, "scripts")
+        refs_dir = os.path.join(skill_dir, "references")
+        os.makedirs(scripts_dir)
+        os.makedirs(refs_dir)
+        mcp_path = os.path.join(refs_dir, "mcp.json")
+        with open(mcp_path, "w") as f:
+            json.dump({"url": "http://x"}, f)
+
+        # Mock __file__ to point to scripts dir
+        with mock.patch("mcp_async_call.os.path.abspath", return_value=os.path.join(scripts_dir, "mcp_async_call.py")):
+            result = _find_mcp_config()
+        if result:
+            self.assertTrue(result.endswith("mcp.json"))
+
+    def test_returns_none_when_not_found(self):
+        from mcp_async_call import _find_mcp_config
+        with mock.patch("mcp_async_call.os.path.abspath", return_value=os.path.join(self.tmpdir, "scripts", "mcp_async_call.py")):
+            with mock.patch("mcp_async_call.os.path.exists", return_value=False):
+                result = _find_mcp_config()
+        self.assertIsNone(result)
+
+
+# ── 5-13. CLI rejects --header ────────────────────────────────────────
+
+class TestHeaderArgRemoved(unittest.TestCase):
+    """--header is no longer accepted as a CLI argument."""
+
+    def test_header_arg_rejected(self):
+        from mcp_async_call import build_parser
+        parser = build_parser()
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["--submit-tool", "gen", "--header", "Key:Value"])
+
+
 if __name__ == "__main__":
     unittest.main()

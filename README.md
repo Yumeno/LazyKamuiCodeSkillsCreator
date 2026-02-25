@@ -326,8 +326,7 @@ python scripts/mcp_async_call.py \
 | `--auto-filename` | `{request_id}_{timestamp}.{ext}` 形式で自動命名 |
 | `--poll-interval` | ポーリング間隔秒数（デフォルト: 2.0） |
 | `--max-polls` | 最大ポーリング回数（デフォルト: 3000） |
-| `--header` | カスタムヘッダー追加（形式: `Key:Value`） |
-| `--config, -c` | .mcp.jsonからエンドポイントを読み込み |
+| `--config, -c` | .mcp.jsonからエンドポイントと認証ヘッダーを読み込み（未指定時はreferences/mcp.jsonを自動探索） |
 | `--save-logs` | `{output}/logs/` にリクエスト/レスポンスログを保存 |
 | `--save-logs-inline` | 出力ファイルと同じ場所に `{filename}_*.json` 形式でログ保存 |
 | `--queue-config` | queue_config.jsonへのパス（未指定時は自動探索。全実行はキューシステム経由） |
@@ -537,7 +536,7 @@ _usage:
       --status-tool "flux_lora_status" \
       --result-tool "flux_lora_result" \
       --args '{"prompt": "your input here"}' \
-      --header "KAMUI-CODE-PASS:your-pass" \
+      --config references/mcp.json \
       --output ./output
   wrapper: python scripts/t2i_kamui_fal_flux_lora.py --args '{"prompt": "..."}'
 

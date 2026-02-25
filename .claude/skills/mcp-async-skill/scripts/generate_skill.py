@@ -336,33 +336,16 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
     # Add usage section if mcp_config is provided
     if mcp_config:
         endpoint = mcp_config.get("url") or mcp_config.get("endpoint", "")
+        all_headers = mcp_config.get("all_headers", {})
         pattern = identify_async_pattern(tools)
         example_args = get_required_params_example(tools)
 
-        # Build header args for bash
-        all_headers = mcp_config.get("all_headers", {})
-        auth_header = mcp_config.get("auth_header", "")
-        auth_value = mcp_config.get("auth_value", "")
-
-        header_lines = []
-        if all_headers:
-            for k, v in all_headers.items():
-                display_v = v if _has_placeholders(v) else f"${{{_sanitize_env_var_name(k)}}}"
-                header_lines.append(f'  --header "{k}:{display_v}"')
-        elif auth_header and auth_value:
-            display_v = auth_value if _has_placeholders(auth_value) else f"${{{_sanitize_env_var_name(auth_header)}}}"
-            header_lines.append(f'  --header "{auth_header}:{display_v}"')
-
-        header_arg = " \\\n".join(header_lines) if header_lines else ""
-        if header_arg:
-            header_arg = " \\\n" + header_arg
-
         bash_example = f"""python .claude/skills/{skill_name}/scripts/mcp_async_call.py \\
-  --endpoint "{endpoint}" \\
+  --config .claude/skills/{skill_name}/references/mcp.json \\
   --submit-tool "{pattern['submit'][0] if pattern['submit'] else 'SUBMIT_TOOL'}" \\
   --status-tool "{pattern['status'][0] if pattern['status'] else 'STATUS_TOOL'}" \\
   --result-tool "{pattern['result'][0] if pattern['result'] else 'RESULT_TOOL'}" \\
-  --args '{example_args}'{header_arg} \\
+  --args '{example_args}' \\
   --output ./output"""
 
         # Build notes dict (with optional env_vars entry for placeholders)
@@ -384,7 +367,7 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
             "wrapper": f"python .claude/skills/{skill_name}/scripts/{skill_name.replace('-', '_')}.py --args '{example_args}'" if skill_name else None,
             "options": {
                 "--endpoint, -e": "MCPサーバーのエンドポイントURL",
-                "--config, -c": ".mcp.jsonからエンドポイントを読み込み",
+                "--config, -c": ".mcp.jsonからエンドポイントと認証ヘッダーを読み込み（未指定時はreferences/mcp.jsonを自動探索）",
                 "--submit-tool": "ジョブ送信用ツール名 (必須)",
                 "--status-tool": "ステータス確認用ツール名 (必須)",
                 "--result-tool": "結果取得用ツール名 (必須)",
@@ -395,7 +378,6 @@ def convert_tools_to_yaml_dict(tools: list[dict], mcp_config: dict = None, skill
                 "--auto-filename": "{request_id}_{timestamp}.{ext} 形式で命名",
                 "--poll-interval": "ポーリング間隔秒数 (デフォルト: 2.0)",
                 "--max-polls": "最大ポーリング回数 (デフォルト: 3000)",
-                "--header": "カスタムヘッダー追加 (Key:Value形式、複数可)",
                 "--save-logs": "{output}/logs/ にログ保存",
                 "--save-logs-inline": "出力ファイル横にログ保存",
                 "--queue-config": "queue_config.jsonへのパス（未指定時は自動探索。全実行はキューシステム経由）",
@@ -610,6 +592,8 @@ This MCP requires the following headers:
 ```
 {headers_lines}
 ```
+
+> Headers are automatically loaded from `references/mcp.json` via `--config`.
 {env_note}"""
     elif auth_header and auth_value:
         # Detect placeholders in single auth value
@@ -640,6 +624,8 @@ This MCP requires authentication header:
 ```
 {auth_header}: {masked_value}
 ```
+
+> Headers are automatically loaded from `references/mcp.json` via `--config`.
 {env_note}"""
 
     # Async pattern section
@@ -722,16 +708,12 @@ python -c "import fal_client; url=fal_client.upload_file('/storage/emulated/0/{c
 The returned URL can be used in the `{cfg['param']}` parameter.
 """
 
-    # Build header argument for Quick Start (mask plaintext auth values)
-    header_arg = ""
+    # Build auth headers for Python example (informational only)
     auth_headers_python = ""
     if all_headers:
-        header_lines = [f'  --header "{k}:{_mask_header_value(k, v)}" \\' for k, v in all_headers.items()]
-        header_arg = "\n" + "\n".join(header_lines)
         auth_headers_python = "\n".join([f'    "{k}": "{_mask_header_value(k, v)}",' for k, v in all_headers.items()])
     elif auth_header and auth_value:
         masked = _mask_header_value(auth_header, auth_value)
-        header_arg = f'\n  --header "{auth_header}:{masked}" \\'
         auth_headers_python = f'    "{auth_header}": "{masked}",'
 
     # Get example args based on required parameters
@@ -800,11 +782,11 @@ MCP integration for **{server_name}**.
 
 ```bash
 python .claude/skills/{skill_name}/scripts/mcp_async_call.py \\
-  --endpoint "{endpoint}" \\
+  --config .claude/skills/{skill_name}/references/mcp.json \\
   --submit-tool "{pattern['submit'][0] if pattern['submit'] else 'SUBMIT_TOOL'}" \\
   --status-tool "{pattern['status'][0] if pattern['status'] else 'STATUS_TOOL'}" \\
   --result-tool "{pattern['result'][0] if pattern['result'] else 'RESULT_TOOL'}" \\
-  --args '{example_args}' \\{header_arg}
+  --args '{example_args}' \\
   --output ./output
 ```
 
@@ -813,7 +795,7 @@ python .claude/skills/{skill_name}/scripts/mcp_async_call.py \\
 | オプション | 短縮 | 説明 | デフォルト |
 |-----------|------|------|-----------|
 | `--endpoint` | `-e` | MCPサーバーのエンドポイントURL | - |
-| `--config` | `-c` | .mcp.jsonからエンドポイントを読み込み | - |
+| `--config` | `-c` | .mcp.jsonからエンドポイントと認証ヘッダーを読み込み | 自動探索 |
 | `--submit-tool` | - | ジョブ送信用ツール名 (必須) | - |
 | `--status-tool` | - | ステータス確認用ツール名 (必須) | - |
 | `--result-tool` | - | 結果取得用ツール名 (必須) | - |
@@ -824,7 +806,6 @@ python .claude/skills/{skill_name}/scripts/mcp_async_call.py \\
 | `--auto-filename` | - | `{{request_id}}_{{timestamp}}.{{ext}}` 形式で命名 | 無効 |
 | `--poll-interval` | - | ポーリング間隔 (秒) | `2.0` |
 | `--max-polls` | - | 最大ポーリング回数 | `3000` |
-| `--header` | - | カスタムヘッダー追加 (`Key:Value`形式、複数可) | - |
 | `--save-logs` | - | `{{output}}/logs/` にログ保存 | 無効 |
 | `--save-logs-inline` | - | 出力ファイル横にログ保存 | 無効 |
 | `--queue-config` | - | queue_config.jsonへのパス（未指定時は自動探索） | ラッパー自動設定 |
@@ -1078,32 +1059,12 @@ def generate_wrapper_script(mcp_config: dict, tools: list[dict], skill_name: str
     endpoint = mcp_config.get("url") or mcp_config.get("endpoint", "")
     pattern = identify_async_pattern(tools)
 
-    # Get auth headers for --header arguments (mask plaintext values)
-    all_headers = mcp_config.get("all_headers", {})
-    auth_header = mcp_config.get("auth_header", "")
-    auth_value = mcp_config.get("auth_value", "")
-
-    header_defaults = []
-    has_plaintext = False
-    if all_headers:
-        for k, v in all_headers.items():
-            masked = _mask_header_value(k, v)
-            if masked != v:
-                has_plaintext = True
-            header_defaults.append(f'    ("--header", "{k}:{masked}"),')
-    elif auth_header and auth_value:
-        masked = _mask_header_value(auth_header, auth_value)
-        if masked != auth_value:
-            has_plaintext = True
-        header_defaults.append(f'    ("--header", "{auth_header}:{masked}"),')
-
-    header_defaults_str = "\n".join(header_defaults) if header_defaults else ""
-
     script = f'''#!/usr/bin/env python3
 """
 {skill_name} - Wrapper with preset defaults for mcp_async_call.py
 
 This wrapper pre-configures endpoint, tool names, and authentication.
+Authentication headers are loaded from references/mcp.json via --config.
 All mcp_async_call.py options are supported and can override defaults.
 
 Usage:
@@ -1131,19 +1092,14 @@ DEFAULTS = [
     ("--status-tool", "{pattern['status'][0] if pattern['status'] else 'status'}"),
     ("--result-tool", "{pattern['result'][0] if pattern['result'] else 'result'}"),
     ("--queue-config", os.path.join(os.path.dirname(os.path.dirname(__file__)), "queue_config.json")),
-{header_defaults_str}
+    ("--config", os.path.join(os.path.dirname(os.path.dirname(__file__)), "references", "mcp.json")),
 ]
 
 def main():
     # Inject defaults into sys.argv (only if not already specified)
     args = sys.argv[1:]
     for key, value in DEFAULTS:
-        # For --header, always add (can have multiple)
-        if key == "--header":
-            if key not in args:
-                args = [key, value] + args
-        # For other options, only add if not specified
-        elif key not in args:
+        if key not in args:
             args = [key, value] + args
 
     sys.argv = [sys.argv[0]] + args
