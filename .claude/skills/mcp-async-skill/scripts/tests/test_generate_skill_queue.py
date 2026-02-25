@@ -164,6 +164,29 @@ class TestWrapperQueueConfig(unittest.TestCase):
         )
         self.assertIn("queue_config.json", wrapper)
 
+    def test_wrapper_uses_config_not_header(self):
+        """Wrapper should use --config for auth, not --header."""
+        wrapper = generate_skill.generate_wrapper_script(
+            self.mcp_config, self.tools, "test-skill"
+        )
+        self.assertIn('"--config"', wrapper)
+        self.assertIn("mcp.json", wrapper)
+        self.assertNotIn('"--header"', wrapper)
+
+    def test_wrapper_with_auth_uses_config_not_header(self):
+        """Even with auth headers, wrapper should use --config, not --header."""
+        mcp_config = {
+            "url": "http://mcp-server:8000/sse",
+            "all_headers": {"Authorization": "Bearer ${API_KEY}"},
+            "auth_header": "Authorization",
+            "auth_value": "Bearer ${API_KEY}",
+        }
+        wrapper = generate_skill.generate_wrapper_script(
+            mcp_config, self.tools, "test-skill"
+        )
+        self.assertIn('"--config"', wrapper)
+        self.assertNotIn('"--header"', wrapper)
+
 
 # ── 6-4. SKILL.md Tests ────────────────────────────────────────────────
 
@@ -183,6 +206,24 @@ class TestSkillMdQueue(unittest.TestCase):
             "queue" in md.lower() or "Queue" in md,
             "SKILL.md should mention the queue system",
         )
+
+    def test_skill_md_uses_config_not_header(self):
+        """Generated SKILL.md should use --config, not --header."""
+        mcp_config = {
+            "url": "http://mcp:8000/sse",
+            "name": "test",
+            "all_headers": {"Authorization": "Bearer ${API_KEY}"},
+            "auth_header": "Authorization",
+            "auth_value": "Bearer ${API_KEY}",
+        }
+        tools = [
+            {"name": "submit", "description": "Submit", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+            {"name": "status", "description": "Status", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+            {"name": "result", "description": "Result", "inputSchema": {"type": "object", "properties": {}, "required": []}},
+        ]
+        md = generate_skill.generate_skill_md(mcp_config, tools, "test-skill")
+        self.assertIn("--config", md)
+        self.assertNotIn("--header", md)
 
 
 # ── 6-5. Lazy Mode with Queue ──────────────────────────────────────────

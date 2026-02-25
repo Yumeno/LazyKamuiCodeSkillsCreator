@@ -263,8 +263,7 @@ Main async MCP caller with full flow automation.
 - `--auto-filename`: Use `{request_id}_{timestamp}.{ext}` format
 - `--poll-interval`: Seconds between polls (default: 2.0)
 - `--max-polls`: Maximum poll attempts (default: 3000)
-- `--header`: Add custom header (format: `Key:Value`)
-- `--config, -c`: Load endpoint from .mcp.json
+- `--config, -c`: Load endpoint and auth headers from .mcp.json (auto-discovered from references/mcp.json if not specified)
 - `--save-logs`: Save request/response logs to `{output}/logs/`
 - `--save-logs-inline`: Save logs alongside output file as `{filename}_*.json`
 - `--queue-config`: Path to queue_config.json (auto-discovered if not specified; all execution uses queue system)
