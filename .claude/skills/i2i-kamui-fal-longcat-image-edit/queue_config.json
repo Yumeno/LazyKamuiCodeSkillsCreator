@@ -1,0 +1,15 @@
+{
+  "host": "127.0.0.1",
+  "port": 54321,
+  "idle_timeout_seconds": 60,
+  "default_rate_limit": {
+    "max_concurrent_jobs": 2,
+    "min_interval_seconds": 10.0
+  },
+  "endpoint_rate_limits": {
+    "https://kamui-code.ai/i2i/fal/longcat-image/edit": {
+      "max_concurrent_jobs": 2,
+      "min_interval_seconds": 10.0
+    }
+  }
+}
