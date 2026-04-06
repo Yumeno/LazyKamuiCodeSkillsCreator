@@ -5,10 +5,13 @@ Reads pending jobs from the DB, evaluates per-endpoint concurrency and
 interval limits, and submits eligible jobs to a thread pool for execution.
 """
 import json
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 from . import db
 
@@ -213,5 +216,9 @@ class Dispatcher:
 
     def _loop(self):
         while self._running:
-            self.dispatch_once()
+            try:
+                self.dispatch_once()
+            except Exception:
+                logger.exception("Dispatcher error (will retry next loop)")
+                time.sleep(1.0)
             time.sleep(self.loop_interval)

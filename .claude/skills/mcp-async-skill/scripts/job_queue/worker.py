@@ -5,10 +5,13 @@ Provides a local REST API (http.server) that accepts job submissions,
 returns job status, and runs a background dispatcher for execution.
 """
 import json
+import logging
 import threading
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 from . import db
 from .dispatcher import Dispatcher, QueueConfig
@@ -258,9 +261,12 @@ class WorkerApp:
         """Check idle timeout and shutdown if exceeded."""
         while self._running:
             time.sleep(0.5)
-            elapsed = time.monotonic() - self._last_access
-            active = self.store.count_all_active_jobs()
-            pending = self.store.count_all_pending_jobs()
-            if active == 0 and pending == 0 and elapsed > self.idle_timeout:
-                self.stop()
-                return
+            try:
+                elapsed = time.monotonic() - self._last_access
+                active = self.store.count_all_active_jobs()
+                pending = self.store.count_all_pending_jobs()
+                if active == 0 and pending == 0 and elapsed > self.idle_timeout:
+                    self.stop()
+                    return
+            except Exception:
+                logger.exception("Idle monitor error (will retry)")
