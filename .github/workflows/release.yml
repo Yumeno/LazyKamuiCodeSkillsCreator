@@ -21,17 +21,13 @@ jobs:
 
           mkdir -p $DST/scripts/job_queue
 
-          # Copy scripts (no tests, no __pycache__)
+          # Copy scripts (all .py files, no tests, no __pycache__)
           cp $SRC/scripts/generate_skill.py $DST/scripts/
           cp $SRC/scripts/mcp_async_call.py $DST/scripts/
           cp $SRC/scripts/mcp_worker_daemon.py $DST/scripts/
-          cp $SRC/scripts/job_queue/__init__.py $DST/scripts/job_queue/
-          cp $SRC/scripts/job_queue/db.py $DST/scripts/job_queue/
-          cp $SRC/scripts/job_queue/dispatcher.py $DST/scripts/job_queue/
-          cp $SRC/scripts/job_queue/worker.py $DST/scripts/job_queue/
-          cp $SRC/scripts/job_queue/client.py $DST/scripts/job_queue/
+          cp $SRC/scripts/job_queue/*.py $DST/scripts/job_queue/
 
-          # Copy SKILL.md
+          # Copy SKILL.md and queue config example
           cp $SRC/SKILL.md $DST/
 
           tar czf mcp-async-skill.tar.gz -C $STAGING mcp-async-skill
