@@ -14,6 +14,7 @@ from typing import Callable
 logger = logging.getLogger(__name__)
 
 from . import db
+from .category_limiter import CategoryLimiter
 
 
 class QueueConfig:
@@ -47,6 +48,8 @@ class QueueConfig:
                 limits.get("max_concurrent_jobs", cfg.default_max_concurrent),
                 limits.get("min_interval_seconds", cfg.default_min_interval),
             )
+
+        cfg.category_rate_limits = d.get("category_rate_limits", {})
         return cfg
 
     @classmethod
@@ -77,6 +80,9 @@ class Dispatcher:
         self.config = config
         self.job_executor = job_executor
         self.loop_interval = loop_interval
+        self.category_limiter = CategoryLimiter(
+            getattr(config, "category_rate_limits", None)
+        )
         self._last_run_time: dict[str, float] = {}
         self._pause_until: dict[str, float] = {}
         self._pool = ThreadPoolExecutor(max_workers=max_workers)
@@ -105,6 +111,11 @@ class Dispatcher:
         endpoints = self.store.get_pending_endpoints()
 
         for ep in endpoints:
+            # Check category limit
+            category = self.category_limiter.extract_category(ep)
+            if not self.category_limiter.can_submit(category):
+                continue
+
             max_concurrent, min_interval = self.config.get_limits(ep)
 
             # Check pause
@@ -127,11 +138,16 @@ class Dispatcher:
 
             # Dispatch as many pending jobs as slots allow
             while available_slots > 0:
+                # Re-check category limit before each dispatch
+                if not self.category_limiter.can_submit(category):
+                    break
+
                 job = self.store.get_oldest_pending(ep)
                 if job is None:
                     break
 
                 self.store.update_status(job["id"], "running")
+                self.category_limiter.record_submit(category)
                 self._last_run_time[ep] = time.monotonic()
                 self._pool.submit(self._run_job, job)
                 dispatched += 1
@@ -145,6 +161,11 @@ class Dispatcher:
         recovering_endpoints = self.store.get_recovering_endpoints()
 
         for ep in recovering_endpoints:
+            # Check category pause (but NOT quota — recovery doesn't consume a new submit)
+            category = self.category_limiter.extract_category(ep)
+            if category is not None and self.category_limiter.is_paused(category):
+                continue
+
             max_concurrent, min_interval = self.config.get_limits(ep)
 
             # Check pause
@@ -166,13 +187,26 @@ class Dispatcher:
             if job is None:
                 continue
 
-            # Transition to polling (skip running — no re-submit)
+            # Transition to polling (skip running — no re-submit, no record_submit)
             self.store.update_status(job["id"], "polling")
             self._last_run_time[ep] = time.monotonic()
             self._pool.submit(self._run_job, job)
             dispatched += 1
 
         return dispatched
+
+    @staticmethod
+    def _extract_error_detail(exc: Exception) -> str:
+        """Build a detailed error string from an exception."""
+        detail: dict = {"type": type(exc).__name__, "message": str(exc)}
+        resp = getattr(exc, "response", None)
+        if resp is not None:
+            detail["status_code"] = getattr(resp, "status_code", None)
+            try:
+                detail["response_body"] = resp.text[:2000]
+            except Exception:
+                pass
+        return json.dumps(detail, ensure_ascii=False)
 
     def _run_job(self, job: dict):
         """Execute a job via the injected executor."""
@@ -181,24 +215,35 @@ class Dispatcher:
         except Exception as e:
             resp = getattr(e, "response", None)
             if resp is not None and getattr(resp, "status_code", 0) == 429:
-                # Rate limited: requeue instead of failing
-                if job.get("remote_job_id"):
-                    self.store.update_status(job["id"], "recovering")
+                # Real server rate limit — fail the job and exhaust category
+                category = self.category_limiter.extract_category(
+                    job["endpoint"]
+                )
+                body_text = ""
+                try:
+                    body_text = resp.text[:2000]
+                except Exception:
+                    pass
+
+                body_lower = body_text.lower()
+                if "resets every day" in body_lower:
+                    if category:
+                        self.category_limiter.force_exhaust_daily(category)
+                    label = "Server Rate Limit (429) - Daily limit"
                 else:
-                    self.store.update_status(job["id"], "pending")
-                # Pause endpoint for Retry-After duration (default 30s)
-                retry_after = None
-                if hasattr(resp, "headers"):
-                    raw = resp.headers.get("Retry-After")
-                    if raw:
-                        try:
-                            retry_after = min(float(raw), 60.0)
-                        except (ValueError, TypeError):
-                            pass
-                self.pause_endpoint(job["endpoint"], retry_after or 30.0)
-            else:
+                    if category:
+                        self.category_limiter.force_exhaust_hourly(category)
+                    label = "Server Rate Limit (429) - Hourly limit"
+
                 self.store.update_status(
-                    job["id"], "failed", error=str(e)
+                    job["id"], "failed",
+                    error=f"{label}: {body_text}" if body_text else label,
+                )
+            else:
+                # Non-429 error — record detailed error info
+                error_detail = self._extract_error_detail(e)
+                self.store.update_status(
+                    job["id"], "failed", error=error_detail
                 )
 
     def start(self):

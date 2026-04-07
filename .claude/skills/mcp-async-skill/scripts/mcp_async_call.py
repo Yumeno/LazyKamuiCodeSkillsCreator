@@ -1287,6 +1287,10 @@ Examples:
     queue_group.add_argument("--filter-status", help="Filter jobs by status (used with --list)")
     queue_group.add_argument("--show-args", action="store_true",
                              help="Include original submit args in --list / --wait responses")
+    queue_group.add_argument("--pause-category", metavar="CATEGORY",
+                             help="Pause a category (t2i, i2i, t2v, i2v)")
+    queue_group.add_argument("--resume-category", metavar="CATEGORY",
+                             help="Resume a paused category")
 
     return parser
 
@@ -1294,6 +1298,25 @@ Examples:
 def main():
     parser = build_parser()
     args = parser.parse_args()
+
+    # --pause-category / --resume-category (requires running worker)
+    if args.pause_category:
+        worker_url = resolve_worker_url(args.worker_url, args.queue_config) or "http://127.0.0.1:54321"
+        try:
+            resp = requests.post(f"{worker_url}/api/categories/{args.pause_category}/pause", timeout=10)
+            print(json.dumps(resp.json(), indent=2, ensure_ascii=False))
+        except (requests.ConnectionError, requests.Timeout):
+            print(json.dumps({"error": "Worker is not running"}, indent=2))
+        return
+
+    if args.resume_category:
+        worker_url = resolve_worker_url(args.worker_url, args.queue_config) or "http://127.0.0.1:54321"
+        try:
+            resp = requests.post(f"{worker_url}/api/categories/{args.resume_category}/resume", timeout=10)
+            print(json.dumps(resp.json(), indent=2, ensure_ascii=False))
+        except (requests.ConnectionError, requests.Timeout):
+            print(json.dumps({"error": "Worker is not running"}, indent=2))
+        return
 
     # --list mode needs minimal args (no worker auto-start; falls back to SQLite)
     if args.list:

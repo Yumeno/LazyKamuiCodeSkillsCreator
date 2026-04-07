@@ -294,11 +294,9 @@ def create_mcp_job_executor(results_dir=None):
             return
 
         # Normal path: submit → poll → result
+        # No retry on submit — each attempt consumes server quota
         client = MCPAsyncClient(endpoint, headers)
-        request_id = _with_retry(
-            lambda: client.submit(submit_tool, args),
-            on_retry=_on_rate_limit,
-        )
+        request_id = client.submit(submit_tool, args)
         store.update_status(
             job["id"],
             "polling",
