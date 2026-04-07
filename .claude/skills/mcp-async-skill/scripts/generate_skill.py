@@ -996,6 +996,16 @@ def generate_queue_config(endpoint: str) -> dict:
                 "min_interval_seconds": 10.0,
             }
         },
+        "category_rate_limits": {
+            "limits": {
+                "t2i": {"hourly": 20, "daily": 50},
+                "i2i": {"hourly": 20, "daily": 50},
+                "t2v": {"hourly": 10, "daily": 25},
+                "i2v": {"hourly": 10, "daily": 25},
+            },
+            "aliases": {"r2i": "i2i", "r2v": "i2v"},
+            "min_interval": 1.0,
+        },
     }
 
 
@@ -1003,13 +1013,23 @@ def _copy_queue_files(scripts_dir: Path, skill_dir: Path, endpoint: str):
     """Copy queue system files to generated skill directory."""
     src_dir = Path(__file__).parent
 
-    # Copy job_queue/ package
+    # Copy job_queue/ package (overwrite individual files to avoid rmtree lock issues)
     jq_src = src_dir / "job_queue"
     jq_dst = scripts_dir / "job_queue"
     if jq_src.is_dir():
-        if jq_dst.exists():
-            shutil.rmtree(jq_dst)
-        shutil.copytree(jq_src, jq_dst, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        jq_dst.mkdir(parents=True, exist_ok=True)
+        for src_file in jq_src.rglob("*"):
+            if src_file.name.startswith("__pycache__") or src_file.suffix == ".pyc":
+                continue
+            if "__pycache__" in str(src_file):
+                continue
+            rel = src_file.relative_to(jq_src)
+            dst_file = jq_dst / rel
+            if src_file.is_dir():
+                dst_file.mkdir(parents=True, exist_ok=True)
+            else:
+                dst_file.parent.mkdir(parents=True, exist_ok=True)
+                dst_file.write_bytes(src_file.read_bytes())
 
     # Copy mcp_worker_daemon.py
     daemon_src = src_dir / "mcp_worker_daemon.py"
@@ -1033,7 +1053,7 @@ def _copy_queue_files(scripts_dir: Path, skill_dir: Path, endpoint: str):
         # Preserve user-configurable fields from existing
         for key in ("idle_timeout_seconds", "default_rate_limit",
                      "endpoint_rate_limits", "results_dir",
-                     "job_retention_seconds"):
+                     "job_retention_seconds", "category_rate_limits"):
             if key in existing:
                 merged[key] = existing[key]
 

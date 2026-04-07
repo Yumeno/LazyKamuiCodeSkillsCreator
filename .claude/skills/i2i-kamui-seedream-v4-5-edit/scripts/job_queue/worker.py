@@ -91,7 +91,16 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
         if self.path == "/api/stats":
             stats = app.store.get_stats_by_endpoint()
-            self._send_json(200, {"endpoints": stats})
+            cat_status = app.dispatcher.category_limiter.get_all_status()
+            self._send_json(200, {
+                "endpoints": stats,
+                "category_limits": cat_status,
+            })
+            return
+
+        if self.path == "/api/categories":
+            cat_status = app.dispatcher.category_limiter.get_all_status()
+            self._send_json(200, {"categories": cat_status})
             return
 
         if self.path.startswith("/api/jobs/"):
@@ -127,6 +136,33 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
         # Touch last access time
         app.touch()
+
+        # Category pause/resume
+        if self.path.startswith("/api/categories/"):
+            parts = self.path.rstrip("/").split("/")
+            # /api/categories/{category}/{action}
+            if len(parts) == 5:
+                category = parts[3]
+                action = parts[4]
+                limiter = app.dispatcher.category_limiter
+                if action == "pause":
+                    limiter.pause_category(category)
+                    self._send_json(200, {
+                        "category": category,
+                        "paused": True,
+                        "status": limiter.get_all_status().get(category, {}),
+                    })
+                    return
+                if action == "resume":
+                    limiter.resume_category(category)
+                    self._send_json(200, {
+                        "category": category,
+                        "paused": False,
+                        "status": limiter.get_all_status().get(category, {}),
+                    })
+                    return
+            self._send_json(400, {"error": "Invalid category action. Use /api/categories/{category}/pause or /resume"})
+            return
 
         if self.path == "/api/jobs":
             try:
