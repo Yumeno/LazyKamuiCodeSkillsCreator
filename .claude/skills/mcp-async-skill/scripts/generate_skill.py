@@ -997,17 +997,12 @@ def generate_queue_config(endpoint: str) -> dict:
             }
         },
         "category_rate_limits": {
-            "limits": {
-                "t2i": {"hourly": 20, "daily": 50},
-                "i2i": {"hourly": 20, "daily": 50},
-                "t2v": {"hourly": 10, "daily": 25},
-                "i2v": {"hourly": 10, "daily": 25},
-            },
+            "categories": ["t2i", "i2i", "t2v", "i2v"],
             "aliases": {"r2i": "i2i", "r2v": "i2v"},
             "min_interval": 1.0,
             "max_category_inflight": 1,
             "exhaust_cooldown": 3600,
-            "auto_pause_after_consecutive_429": 3,
+            "auto_pause_after_consecutive_429": 25,
         },
     }
 

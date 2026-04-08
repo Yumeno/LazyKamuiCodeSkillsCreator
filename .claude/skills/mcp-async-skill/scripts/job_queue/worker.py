@@ -202,7 +202,18 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 headers=json.dumps(body["headers"]) if body.get("headers") else None,
             )
 
-            self._send_json(200, {"job_id": job_id, "status": "pending"})
+            resp_data = {"job_id": job_id, "status": "pending"}
+
+            # Warn if the category is paused
+            limiter = app.dispatcher.category_limiter
+            cat = limiter.extract_category(endpoint)
+            if cat and limiter.is_paused(cat):
+                resp_data["warning"] = f"Category {cat} is paused"
+                reason = limiter.get_pause_reason(cat)
+                if reason:
+                    resp_data["pause_reason"] = reason
+
+            self._send_json(200, resp_data)
             return
 
         self._send_json(404, {"error": "Not found"})

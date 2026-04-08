@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """Category-level rate limiting for MCP job queue.
 
-Tracks per-category (t2i, i2i, t2v, i2v) submit counts using fixed time
-windows (clock-hour and calendar-day).  Provides manual pause/resume,
-force-exhaust with rolling-window cooldown, inflight control, and
-automatic pause after consecutive 429 errors.
+Manages per-category (t2i, i2i, t2v, i2v) dispatch gating:
+- Inflight control (submit concurrency per category)
+- Rolling-window cooldown after 429 responses
+- Automatic pause after consecutive 429 errors
+- Immediate pause with detailed reason on non-429 submit errors
+- Manual pause/resume with category state reporting
 """
 import logging
 import threading
@@ -14,44 +16,36 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_LIMITS: dict[str, dict[str, int]] = {
-    "t2i": {"hourly": 20, "daily": 50},
-    "i2i": {"hourly": 20, "daily": 50},
-    "t2v": {"hourly": 10, "daily": 25},
-    "i2v": {"hourly": 10, "daily": 25},
-}
+KNOWN_CATEGORIES: set[str] = {"t2i", "i2i", "t2v", "i2v"}
 
 DEFAULT_ALIASES: dict[str, str] = {"r2i": "i2i", "r2v": "i2v"}
 
 
-def _hour_key() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d-%H")
-
-
-def _day_key() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
 class CategoryLimiter:
-    """Category rate limiter with inflight control, rolling cooldown, and auto-pause."""
+    """Category limiter with inflight control, rolling cooldown, and auto-pause."""
 
     def __init__(self, config: dict | None = None):
         config = config or {}
-        self._limits: dict[str, dict[str, int]] = {
-            **DEFAULT_LIMITS,
-            **config.get("limits", {}),
-        }
+
+        # Build category set from config or defaults
+        cat_list = config.get("categories", None)
+        if cat_list is not None:
+            self._categories: set[str] = set(cat_list)
+        else:
+            # Legacy: extract from "limits" keys if present, else use defaults
+            limits = config.get("limits", None)
+            self._categories = set(limits.keys()) if limits else set(KNOWN_CATEGORIES)
+
         self._aliases: dict[str, str] = {
             **DEFAULT_ALIASES,
             **config.get("aliases", {}),
         }
 
-        # Fixed-window counters
-        self._hourly: dict[str, dict] = {}
-        self._daily: dict[str, dict] = {}
-
-        # Pause / interval
+        # Pause state
         self._paused: set[str] = set()
+        self._pause_reason: dict[str, dict] = {}
+
+        # Submit interval
         self._last_submit: dict[str, float] = {}
         self._min_interval: float = float(config.get("min_interval", 1.0))
 
@@ -59,14 +53,14 @@ class CategoryLimiter:
         self._inflight: dict[str, int] = {}
         self._max_inflight: int = int(config.get("max_category_inflight", 1))
 
-        # Rolling-window cooldown for force_exhaust
+        # Rolling-window cooldown for 429
         self._exhaust_time: dict[str, float] = {}
         self._exhaust_cooldown: float = float(config.get("exhaust_cooldown", 3600.0))
 
         # Consecutive 429 auto-pause
         self._consecutive_429: dict[str, int] = {}
         self._auto_pause_threshold: int = int(
-            config.get("auto_pause_after_consecutive_429", 3)
+            config.get("auto_pause_after_consecutive_429", 25)
         )
 
         self._lock = threading.Lock()
@@ -93,89 +87,54 @@ class CategoryLimiter:
             return None
 
         category = self._aliases.get(raw, raw)
-        if category in self._limits:
+        if category in self._categories:
             return category
         return None
-
-    # ------------------------------------------------------------------
-    # Window helpers (must be called under self._lock)
-    # ------------------------------------------------------------------
-
-    def _get_hourly(self, category: str) -> dict:
-        cur_key = _hour_key()
-        rec = self._hourly.get(category)
-        if rec is None or rec["window"] != cur_key:
-            rec = {"window": cur_key, "count": 0, "exhausted": False}
-            self._hourly[category] = rec
-        return rec
-
-    def _get_daily(self, category: str) -> dict:
-        cur_key = _day_key()
-        rec = self._daily.get(category)
-        if rec is None or rec["window"] != cur_key:
-            rec = {"window": cur_key, "count": 0, "exhausted": False}
-            self._daily[category] = rec
-        return rec
-
-    def _check_cooldown_expired(self, category: str) -> None:
-        """Clear exhausted flags if rolling cooldown has elapsed."""
-        exhaust_at = self._exhaust_time.get(category, 0.0)
-        if exhaust_at > 0:
-            if (time.monotonic() - exhaust_at) >= self._exhaust_cooldown:
-                self._get_hourly(category)["exhausted"] = False
-                self._get_daily(category)["exhausted"] = False
-                self._exhaust_time.pop(category, None)
-                logger.info(
-                    "[CategoryLimiter] Cooldown expired for %s, resuming",
-                    category,
-                )
 
     # ------------------------------------------------------------------
     # Public API — submit gating
     # ------------------------------------------------------------------
 
     def can_submit(self, category: str) -> bool:
-        """Return True if *category* has remaining quota, is not paused,
-        and has inflight slots available."""
+        """Return True if *category* is not paused, has inflight slots,
+        and is not in cooldown."""
         if category is None:
             return True
         with self._lock:
             if category in self._paused:
                 return False
-            limits = self._limits.get(category)
-            if limits is None:
+            if category not in self._categories:
                 return True
 
             # Enforce minimum interval between submits
             now = time.monotonic()
-            last = self._last_submit.get(category, 0.0)
-            if (now - last) < self._min_interval:
+            if (now - self._last_submit.get(category, 0.0)) < self._min_interval:
                 return False
 
             # Inflight check
             if self._inflight.get(category, 0) >= self._max_inflight:
                 return False
 
-            # Check rolling cooldown expiry
-            self._check_cooldown_expired(category)
-
-            hourly = self._get_hourly(category)
-            if hourly["exhausted"] or hourly["count"] >= limits["hourly"]:
-                return False
-
-            daily = self._get_daily(category)
-            if daily["exhausted"] or daily["count"] >= limits["daily"]:
-                return False
+            # Cooldown check (429 rolling window)
+            exhaust_at = self._exhaust_time.get(category, 0.0)
+            if exhaust_at > 0:
+                if (now - exhaust_at) < self._exhaust_cooldown:
+                    return False
+                else:
+                    # Cooldown expired
+                    self._exhaust_time.pop(category, None)
+                    logger.info(
+                        "[CategoryLimiter] Cooldown expired for %s, resuming",
+                        category,
+                    )
 
             return True
 
-    def record_submit(self, category: str):
-        """Increment submit count for *category* in both windows."""
+    def touch_submit(self, category: str):
+        """Update last-submit timestamp (for min_interval enforcement)."""
         if category is None:
             return
         with self._lock:
-            self._get_hourly(category)["count"] += 1
-            self._get_daily(category)["count"] += 1
             self._last_submit[category] = time.monotonic()
 
     def record_success(self, category: str):
@@ -208,48 +167,65 @@ class CategoryLimiter:
             self._inflight[category] = max(0, self._inflight.get(category, 0) - 1)
 
     # ------------------------------------------------------------------
-    # Force exhaust (real 429 / 503)
+    # 429 handling (cooldown + consecutive counter)
     # ------------------------------------------------------------------
 
-    def force_exhaust_hourly(self, category: str, is_429: bool = True):
-        """Mark hourly window as exhausted with rolling cooldown.
-
-        Args:
-            is_429: True for real 429 (counts toward auto-pause),
-                    False for 503 (transient, no auto-pause).
-        """
+    def force_cooldown(self, category: str):
+        """Start rolling cooldown for the category (on 429)."""
         if category is None:
             return
         with self._lock:
-            self._get_hourly(category)["exhausted"] = True
             self._exhaust_time[category] = time.monotonic()
 
-            if is_429:
-                count = self._consecutive_429.get(category, 0) + 1
-                self._consecutive_429[category] = count
-                if count >= self._auto_pause_threshold:
-                    self._paused.add(category)
-                    logger.warning(
-                        "[CategoryLimiter] Auto-paused %s after %d consecutive 429s",
-                        category, count,
-                    )
-
-    def force_exhaust_daily(self, category: str):
-        """Mark daily window as exhausted (real 429 received)."""
+    def record_429(self, category: str):
+        """Increment consecutive 429 counter. Auto-pauses if threshold reached."""
         if category is None:
             return
         with self._lock:
-            self._get_daily(category)["exhausted"] = True
-            self._exhaust_time[category] = time.monotonic()
-
             count = self._consecutive_429.get(category, 0) + 1
             self._consecutive_429[category] = count
             if count >= self._auto_pause_threshold:
                 self._paused.add(category)
+                self._pause_reason[category] = {
+                    "reason": "consecutive_429",
+                    "count": count,
+                    "paused_at": datetime.now(timezone.utc).isoformat(),
+                }
                 logger.warning(
                     "[CategoryLimiter] Auto-paused %s after %d consecutive 429s",
                     category, count,
                 )
+
+    # ------------------------------------------------------------------
+    # Error-triggered pause (non-429)
+    # ------------------------------------------------------------------
+
+    def pause_with_reason(
+        self,
+        category: str,
+        reason: str,
+        status_code: int | None = None,
+        error_detail: str = "",
+        job_id: str = "",
+        endpoint: str = "",
+    ):
+        """Pause category due to an error. Stores detailed reason."""
+        if category is None:
+            return
+        with self._lock:
+            self._paused.add(category)
+            self._pause_reason[category] = {
+                "reason": reason,
+                "status_code": status_code,
+                "error_detail": error_detail[:2000],
+                "job_id": job_id,
+                "endpoint": endpoint,
+                "paused_at": datetime.now(timezone.utc).isoformat(),
+            }
+        logger.warning(
+            "[CategoryLimiter] Paused %s: %s (HTTP %s) — %s",
+            category, reason, status_code, error_detail[:200],
+        )
 
     # ------------------------------------------------------------------
     # Manual pause / resume
@@ -259,18 +235,29 @@ class CategoryLimiter:
         """Manually pause a category. Pending jobs stay in queue."""
         with self._lock:
             self._paused.add(category)
+            self._pause_reason[category] = {
+                "reason": "manual",
+                "paused_at": datetime.now(timezone.utc).isoformat(),
+            }
 
     def resume_category(self, category: str):
-        """Remove manual pause and reset consecutive 429 counter.
-        Dispatch resumes if limits allow."""
+        """Remove pause, clear reason and consecutive 429 counter."""
         with self._lock:
             self._paused.discard(category)
+            self._pause_reason.pop(category, None)
             self._consecutive_429.pop(category, None)
+            # Also clear cooldown so dispatch resumes immediately
+            self._exhaust_time.pop(category, None)
 
     def is_paused(self, category: str) -> bool:
-        """Return True if *category* is manually paused."""
+        """Return True if *category* is paused."""
         with self._lock:
             return category in self._paused
+
+    def get_pause_reason(self, category: str) -> dict | None:
+        """Return pause reason dict, or None if not paused."""
+        with self._lock:
+            return self._pause_reason.get(category)
 
     # ------------------------------------------------------------------
     # Status reporting
@@ -281,31 +268,21 @@ class CategoryLimiter:
         with self._lock:
             now = time.monotonic()
             result = {}
-            for cat, limits in self._limits.items():
-                hourly = self._get_hourly(cat)
-                daily = self._get_daily(cat)
+            for cat in sorted(self._categories):
                 exhaust_at = self._exhaust_time.get(cat, 0.0)
                 cooldown_remaining = max(
                     0.0, self._exhaust_cooldown - (now - exhaust_at)
                 ) if exhaust_at > 0 else 0.0
 
-                result[cat] = {
-                    "hourly": {
-                        "count": hourly["count"],
-                        "limit": limits["hourly"],
-                        "exhausted": hourly["exhausted"],
-                        "window": hourly["window"],
-                    },
-                    "daily": {
-                        "count": daily["count"],
-                        "limit": limits["daily"],
-                        "exhausted": daily["exhausted"],
-                        "window": daily["window"],
-                    },
+                entry: dict = {
                     "paused": cat in self._paused,
                     "inflight": self._inflight.get(cat, 0),
                     "max_inflight": self._max_inflight,
                     "consecutive_429": self._consecutive_429.get(cat, 0),
                     "cooldown_remaining_s": round(cooldown_remaining, 1),
                 }
+                reason = self._pause_reason.get(cat)
+                if reason:
+                    entry["pause_reason"] = reason
+                result[cat] = entry
             return result
