@@ -23,6 +23,9 @@ Claude Code用のMCPスキルジェネレーター。非同期ジョブパター
 | **複数ファイル対応** | レスポンス内の全URLを再帰探索し一括ダウンロード。連番サフィックス自動付与 | 自動 | [📖](docs/output-path-strategy.md) |
 | **キューシステム** | ローカルワーカーによるエンドポイント別レートリミットと並行数制御。自動起動・自動終了 | `--queue-config` | [📖](docs/queue_system_design.md) |
 | **キュー堅牢化** | ゾンビジョブ回復・指数バックオフリトライ・429 Retry-After対応・ワーカー側ダウンロード | 自動 | [📖](docs/queue_system_hardening.md) |
+| **カテゴリ別制御** | t2i/i2i/t2v/i2vカテゴリ単位でのinflight制御・429自動リトライ・非429エラー時のカテゴリ即pause | 自動 | |
+| **セッション管理** | MCPセッションをendpoint単位でキャッシュ。認証サーバーへの負荷を削減 | 自動 | |
+| **カテゴリpause/resume** | カテゴリ単位での手動一時停止・再開。他端末との枠共有時に便利 | `--pause-category` | |
 
 ### ⚠️ 実行ディレクトリについて
 
@@ -338,6 +341,8 @@ python scripts/mcp_async_call.py \
 | `--stats` | エンドポイント別統計情報を表示 |
 | `--filter-status` | `--list`使用時にステータスでフィルタ |
 | `--show-args` | `--list` / `--wait` 使用時に元の送信引数を表示 |
+| `--pause-category` | 指定カテゴリ（t2i, i2i, t2v, i2v）のdispatchを一時停止 |
+| `--resume-category` | 一時停止したカテゴリのdispatchを再開 |
 
 **ポーリングタイムアウトの変更:**
 
@@ -383,12 +388,18 @@ MCP仕様から完全なスキルを生成。
 ```
 skill-name/
 ├── SKILL.md              # 使用方法ドキュメント
-├── queue_config.json     # キュー設定（レートリミット等）
+├── queue_config.json     # キュー設定（レートリミット・カテゴリ制御等）
 ├── scripts/
 │   ├── mcp_async_call.py # コア非同期コーラー
 │   ├── mcp_worker_daemon.py # キューワーカーデーモン
 │   ├── skill_name.py     # 便利ラッパー
 │   └── job_queue/        # キューシステムパッケージ
+│       ├── db.py         # SQLiteジョブストア
+│       ├── dispatcher.py # エンドポイント別・カテゴリ別レートリミット
+│       ├── worker.py     # HTTP REST APIサーバー
+│       ├── client.py     # キュークライアント
+│       ├── category_limiter.py # カテゴリ別制御（inflight・cooldown・pause）
+│       └── session_manager.py  # MCPセッション管理
 └── references/
     ├── mcp.json          # 元のMCPコンフィグ
     └── tools.json        # 元のツール仕様
@@ -431,6 +442,8 @@ print(result["saved_path"])  # ダウンロードしたファイルへのパス
 ### 仕組み
 
 - ローカルワーカーデーモン（port 54321）がHTTP APIでジョブを受け付け、エンドポイント別にレートリミットを適用
+- **カテゴリ別制御**: t2i/i2i/t2v/i2vカテゴリ単位でinflight制御（submit同時実行数制限）
+- **セッション管理**: MCPセッション（Mcp-Session-Id）をendpoint単位でキャッシュし認証サーバーの負荷を削減
 - 初回使用時に自動起動、アイドルタイムアウト（デフォルト: 60秒）で自動終了
 - SQLiteでジョブ状態を永続化。複数スキルで共有キューディレクトリ（`.claude/queue/`）を使用
 - ワーカー停止時（アイドルタイムアウト後）でも `--list` / `--stats` / `--wait` はSQLiteから直接読み取りで動作
@@ -455,6 +468,12 @@ python mcp_async_call.py --queue-config ../queue_config.json --stats
 
 # 送信引数付きでジョブ一覧
 python mcp_async_call.py --queue-config ../queue_config.json --list --show-args
+
+# カテゴリを一時停止（他端末で枠を使いたい時など）
+python mcp_async_call.py --pause-category t2i
+
+# カテゴリを再開
+python mcp_async_call.py --resume-category t2i
 ```
 
 ### 堅牢化機能
@@ -462,8 +481,10 @@ python mcp_async_call.py --queue-config ../queue_config.json --list --show-args
 | 機能 | 説明 |
 |-----|------|
 | **ゾンビジョブ回復** | ワーカー再起動時、処理中だったジョブを自動的に回復（polling+remote_job_id有り→recovering）または失敗マーク |
-| **指数バックオフリトライ** | 接続エラー・503/504に対し2s→4s→8sのバックオフで自動リトライ（最大3回） |
-| **429 Retry-After対応** | 429レスポンスのRetry-Afterヘッダーを尊重し、エンドポイント単位で一時停止 |
+| **429自動リトライ** | 429レスポンス時はジョブをpendingに戻し、1時間のcooldown後に自動リトライ。連続25回で自動pause |
+| **非429エラー保護** | 422/503等のエラー時はジョブをfailedにし、カテゴリを即座にpause。エラー詳細を保持しユーザーに通知 |
+| **セッション管理** | MCPセッションをendpoint単位でキャッシュ。セッション切れ（HTTP 404）を自動検知し再initialize |
+| **inflight制御** | カテゴリ単位でsubmit同時実行数を制限（デフォルト: 1）。submit集中によるサーバー負荷を防止 |
 | **ワーカー側ダウンロード** | 結果ファイルをワーカーがダウンロードし `results/{job_id}/` に保存 |
 | **古いジョブ自動削除** | 起動時に指定期間超過のジョブをDB・結果ファイルごと自動削除（デフォルト: 24時間） |
 | **設定マージ保護** | スキル再生成時にqueue_config.jsonのユーザーカスタマイズを保持 |
@@ -484,6 +505,14 @@ python mcp_async_call.py --queue-config ../queue_config.json --list --show-args
       "min_interval_seconds": 10.0
     }
   },
+  "category_rate_limits": {
+    "categories": ["t2i", "i2i", "t2v", "i2v"],
+    "aliases": {"r2i": "i2i", "r2v": "i2v"},
+    "min_interval": 1.0,
+    "max_category_inflight": 1,
+    "exhaust_cooldown": 3600,
+    "auto_pause_after_consecutive_429": 25
+  },
   "job_retention_seconds": 86400,
   "results_dir": ".claude/queue/results"
 }
@@ -493,16 +522,16 @@ python mcp_async_call.py --queue-config ../queue_config.json --list --show-args
 
 ## エラーハンドリング
 
-スクリプトは以下を処理します：
-- レスポンス内のJSON-RPCエラー
-- ジョブ失敗（status: failed/error）
-- 最大ポーリング後のタイムアウト
-- ダウンロード失敗
-- 接続エラー時の自動リトライ（指数バックオフ）
-- 429 Too Many Requests（Retry-After尊重）
-- ゾンビジョブの自動回復・失敗マーク
+| エラー種別 | 挙動 |
+|-----------|------|
+| **429 Too Many Requests** | ジョブをpendingに戻し、1時間cooldown後に自動リトライ。連続25回で自動pause |
+| **非429エラー（422, 503等）** | ジョブをfailにし、同カテゴリを即座にpause。エラー詳細を保持。`--resume-category` で再開 |
+| **セッション切れ（HTTP 404）** | 自動で再initializeし1回リトライ |
+| **接続エラー** | status/result取得時は指数バックオフで自動リトライ（最大3回） |
+| **ポーリングタイムアウト** | 最大ポーリング回数超過でfailed |
+| **ゾンビジョブ** | ワーカー再起動時に自動回復または失敗マーク |
 
-すべてのエラーは説明的なメッセージを含む例外を発生させます。
+すべてのエラーは構造化されたJSON（status_code, response_body）で詳細に記録されます。
 
 ## Lazyモード詳細
 
@@ -572,6 +601,10 @@ flux_lora_result:
 ```
 
 AIはこのYAMLファイル1つを読むだけで、実行に必要な情報をすべて取得できます。
+
+## 更新履歴
+
+詳細な更新履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
 ## ライセンス
 
