@@ -147,7 +147,7 @@ class Dispatcher:
                     break
 
                 self.store.update_status(job["id"], "running")
-                self.category_limiter.record_submit(category)
+                self.category_limiter.touch_submit(category)
                 self._last_run_time[ep] = time.monotonic()
                 self._pool.submit(self._run_job, job)
                 dispatched += 1
@@ -233,39 +233,32 @@ class Dispatcher:
                     pass
 
             if status_code == 429:
-                # Real server rate limit — fail + exhaust + consecutive counter
-                body_lower = body_text.lower()
-                if "resets every day" in body_lower:
-                    if category:
-                        self.category_limiter.force_exhaust_daily(category)
-                    label = "Server Rate Limit (429) - Daily limit"
-                else:
-                    if category:
-                        self.category_limiter.force_exhaust_hourly(
-                            category, is_429=True
-                        )
-                    label = "Server Rate Limit (429) - Hourly limit"
-                self.store.update_status(
-                    job["id"], "failed",
-                    error=f"{label}: {body_text}" if body_text else label,
-                )
-            elif status_code == 503:
-                # Transient server error — exhaust but no consecutive count
+                # 429 does NOT consume server quota → requeue + cooldown
                 if category:
-                    self.category_limiter.force_exhaust_hourly(
-                        category, is_429=False
-                    )
+                    self.category_limiter.force_cooldown(category)
+                    self.category_limiter.record_429(category)
                 self.store.update_status(
-                    job["id"], "failed",
-                    error=f"Server Error (503): {body_text}" if body_text
-                    else "Server Error (503)",
+                    job["id"], "pending",
+                    error=(
+                        f"Rate Limit (429) - will retry after cooldown: {body_text}"
+                        if body_text else "Rate Limit (429) - will retry after cooldown"
+                    ),
                 )
             else:
-                # Other error — record detailed info
+                # Non-429 errors consume quota → failed + pause category
                 error_detail = self._extract_error_detail(e)
                 self.store.update_status(
                     job["id"], "failed", error=error_detail
                 )
+                if category:
+                    self.category_limiter.pause_with_reason(
+                        category,
+                        reason="submit_error",
+                        status_code=status_code,
+                        error_detail=error_detail,
+                        job_id=job["id"],
+                        endpoint=job["endpoint"],
+                    )
         finally:
             if acquired:
                 self.category_limiter.release_inflight(

@@ -1410,6 +1410,17 @@ def main():
         save_logs_inline=args.save_logs_inline,
     )
 
+    # Show pause warning if present
+    if isinstance(result, dict) and result.get("warning"):
+        print(f"\n⚠ WARNING: {result['warning']}", file=sys.stderr)
+        pause_reason = result.get("pause_reason")
+        if pause_reason:
+            print(f"  Reason: {pause_reason.get('reason', 'unknown')}", file=sys.stderr)
+            detail = pause_reason.get("error_detail", "")
+            if detail:
+                print(f"  Error: {detail[:500]}", file=sys.stderr)
+            print("  Use --resume-category to resume dispatching", file=sys.stderr)
+
     print("\n=== Result ===")
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
