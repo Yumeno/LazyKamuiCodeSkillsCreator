@@ -79,7 +79,7 @@ python scripts/mcp_async_call.py \
 **bash (Linux / macOS / WSL / Git Bash):**
 ```bash
 mkdir -p .claude/skills
-curl -fSL -o mcp-async-skill.tar.gz https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/download/lazy-v2.5.0/mcp-async-skill.tar.gz
+curl -fSL -o mcp-async-skill.tar.gz https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/download/lazy-v2.6.0/mcp-async-skill.tar.gz
 tar xzf mcp-async-skill.tar.gz -C .claude/skills/
 rm mcp-async-skill.tar.gz
 pip install pyyaml requests
@@ -88,7 +88,7 @@ pip install pyyaml requests
 **PowerShell (Windows):**
 ```powershell
 New-Item -ItemType Directory -Force -Path .claude\skills
-curl.exe -fSL -o mcp-async-skill.tar.gz https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/download/lazy-v2.5.0/mcp-async-skill.tar.gz
+curl.exe -fSL -o mcp-async-skill.tar.gz https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/download/lazy-v2.6.0/mcp-async-skill.tar.gz
 tar xzf mcp-async-skill.tar.gz -C .claude\skills\
 Remove-Item mcp-async-skill.tar.gz
 pip install pyyaml requests
