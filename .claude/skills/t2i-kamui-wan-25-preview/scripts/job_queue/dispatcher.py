@@ -210,21 +210,30 @@ class Dispatcher:
 
     def _run_job(self, job: dict):
         """Execute a job via the injected executor."""
+        category = self.category_limiter.extract_category(job["endpoint"])
+        acquired = (
+            self.category_limiter.acquire_inflight(category)
+            if category else False
+        )
+        had_error = False
         try:
             self.job_executor(job)
+            if category:
+                self.category_limiter.record_success(category)
         except Exception as e:
+            had_error = True
             resp = getattr(e, "response", None)
-            if resp is not None and getattr(resp, "status_code", 0) == 429:
-                # Real server rate limit — fail the job and exhaust category
-                category = self.category_limiter.extract_category(
-                    job["endpoint"]
-                )
-                body_text = ""
+            status_code = getattr(resp, "status_code", 0) if resp else 0
+
+            body_text = ""
+            if resp is not None:
                 try:
                     body_text = resp.text[:2000]
                 except Exception:
                     pass
 
+            if status_code == 429:
+                # Real server rate limit — fail + exhaust + consecutive counter
                 body_lower = body_text.lower()
                 if "resets every day" in body_lower:
                     if category:
@@ -232,18 +241,35 @@ class Dispatcher:
                     label = "Server Rate Limit (429) - Daily limit"
                 else:
                     if category:
-                        self.category_limiter.force_exhaust_hourly(category)
+                        self.category_limiter.force_exhaust_hourly(
+                            category, is_429=True
+                        )
                     label = "Server Rate Limit (429) - Hourly limit"
-
                 self.store.update_status(
                     job["id"], "failed",
                     error=f"{label}: {body_text}" if body_text else label,
                 )
+            elif status_code == 503:
+                # Transient server error — exhaust but no consecutive count
+                if category:
+                    self.category_limiter.force_exhaust_hourly(
+                        category, is_429=False
+                    )
+                self.store.update_status(
+                    job["id"], "failed",
+                    error=f"Server Error (503): {body_text}" if body_text
+                    else "Server Error (503)",
+                )
             else:
-                # Non-429 error — record detailed error info
+                # Other error — record detailed info
                 error_detail = self._extract_error_detail(e)
                 self.store.update_status(
                     job["id"], "failed", error=error_detail
+                )
+        finally:
+            if acquired:
+                self.category_limiter.release_inflight(
+                    category, success=not had_error
                 )
 
     def start(self):
