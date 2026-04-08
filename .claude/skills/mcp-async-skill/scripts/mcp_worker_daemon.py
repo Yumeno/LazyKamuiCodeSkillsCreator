@@ -204,11 +204,13 @@ def create_rollback_fn():
     return rollback_stale_jobs
 
 
-def create_mcp_job_executor(results_dir=None):
+def create_mcp_job_executor(results_dir=None, session_manager=None):
     """Create the real job executor that uses MCPAsyncClient.
 
     Args:
         results_dir: Directory to save downloaded results. If None, skip downloads.
+        session_manager: Optional SessionManager for session caching.
+            If None, each job creates a fresh MCPAsyncClient (legacy behavior).
     """
     def _poll_and_get_result(store, job_id, client, request_id,
                              status_tool, result_tool, on_rate_limit=None):
@@ -260,6 +262,38 @@ def create_mcp_job_executor(results_dir=None):
         else:
             store.update_status(job_id, "completed", result="{}")
 
+    def _make_client(endpoint, headers, session_id=None):
+        """Create an MCPAsyncClient, optionally with a cached session."""
+        if session_manager is not None and session_id is None:
+            sid, gen = session_manager.get_session(endpoint, headers)
+            client = MCPAsyncClient(endpoint, headers)
+            client.session_id = sid
+            client.headers["Mcp-Session-Id"] = sid
+            client._initialized = True
+            return client, gen
+        client = MCPAsyncClient(endpoint, headers)
+        if session_id is not None:
+            client.session_id = session_id
+            client.headers["Mcp-Session-Id"] = session_id
+            client._initialized = True
+        return client, None
+
+    def _submit_with_session_retry(client, gen, endpoint, headers,
+                                    submit_tool, args):
+        """Submit, retrying once on 404 (session expired)."""
+        try:
+            return client.submit(submit_tool, args), client, gen
+        except Exception as e:
+            resp = getattr(e, "response", None)
+            if (resp is not None
+                    and getattr(resp, "status_code", 0) == 404
+                    and session_manager is not None
+                    and gen is not None):
+                session_manager.invalidate(endpoint, headers, gen)
+                client, gen = _make_client(endpoint, headers)
+                return client.submit(submit_tool, args), client, gen
+            raise
+
     def execute_job(job: dict):
         """Execute a single job against an external MCP server."""
         import json as _json
@@ -284,8 +318,8 @@ def create_mcp_job_executor(results_dir=None):
 
         # Recovery path: job already submitted, skip to poll+result
         if job.get("remote_job_id"):
-            client = MCPAsyncClient(endpoint, headers)
-            client.session_id = job["session_id"]
+            # Discard old DB session_id — use fresh session from SessionManager
+            client, gen = _make_client(endpoint, headers)
             _poll_and_get_result(
                 store, job["id"], client, job["remote_job_id"],
                 status_tool, result_tool,
@@ -295,8 +329,11 @@ def create_mcp_job_executor(results_dir=None):
 
         # Normal path: submit → poll → result
         # No retry on submit — each attempt consumes server quota
-        client = MCPAsyncClient(endpoint, headers)
-        request_id = client.submit(submit_tool, args)
+        # Exception: 404 (session expired) triggers one re-initialize + retry
+        client, gen = _make_client(endpoint, headers)
+        request_id, client, gen = _submit_with_session_retry(
+            client, gen, endpoint, headers, submit_tool, args,
+        )
         store.update_status(
             job["id"],
             "polling",
@@ -362,8 +399,12 @@ def main():
     # Retention period for old jobs
     retention_seconds = config_dict.get("job_retention_seconds", 86400.0)
 
-    # Create executor with results_dir
-    executor = create_mcp_job_executor(results_dir=results_dir)
+    # Create session manager and executor
+    from job_queue.session_manager import SessionManager
+    session_mgr = SessionManager()
+    executor = create_mcp_job_executor(
+        results_dir=results_dir, session_manager=session_mgr
+    )
 
     # Create and start worker
     app = WorkerApp(

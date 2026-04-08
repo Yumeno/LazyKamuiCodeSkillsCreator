@@ -1005,6 +1005,9 @@ def generate_queue_config(endpoint: str) -> dict:
             },
             "aliases": {"r2i": "i2i", "r2v": "i2v"},
             "min_interval": 1.0,
+            "max_category_inflight": 1,
+            "exhaust_cooldown": 3600,
+            "auto_pause_after_consecutive_429": 3,
         },
     }
 
