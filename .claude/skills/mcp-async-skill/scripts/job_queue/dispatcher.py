@@ -106,6 +106,7 @@ class Dispatcher:
         Returns the number of jobs dispatched in this round.
         """
         dispatched = 0
+        dispatched_categories: set[str] = set()
 
         # --- Phase 1: pending jobs (existing logic) ---
         endpoints = self.store.get_pending_endpoints()
@@ -114,6 +115,11 @@ class Dispatcher:
             # Check category limit
             category = self.category_limiter.extract_category(ep)
             if not self.category_limiter.can_submit(category):
+                continue
+
+            # Limit to one dispatch per category per round to avoid
+            # submit bursts across different endpoints in the same category
+            if category is not None and category in dispatched_categories:
                 continue
 
             max_concurrent, min_interval = self.config.get_limits(ep)
@@ -152,6 +158,8 @@ class Dispatcher:
                 self._pool.submit(self._run_job, job)
                 dispatched += 1
                 available_slots -= 1
+                if category is not None:
+                    dispatched_categories.add(category)
 
                 # After first dispatch, re-check interval for subsequent jobs
                 if min_interval > 0:
