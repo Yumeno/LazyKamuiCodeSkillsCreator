@@ -148,16 +148,18 @@ python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
 ```
 .claude/skills/<skill-name>/
 ├── SKILL.md              # 使用方法ドキュメント（全ツール詳細含む）
-├── queue_config.json     # キュー設定（レートリミット等）
+├── queue_config.json     # キュー設定（レートリミット・カテゴリ制御等）
 ├── scripts/
 │   ├── mcp_async_call.py # コア非同期コーラー
 │   ├── mcp_worker_daemon.py # キューワーカーデーモン
 │   ├── <skill_name>.py   # 便利ラッパー
 │   └── job_queue/        # キューシステムパッケージ
 │       ├── db.py         # SQLiteジョブストア
-│       ├── dispatcher.py # エンドポイント別レートリミット
+│       ├── dispatcher.py # エンドポイント別・カテゴリ別レートリミット
 │       ├── worker.py     # HTTP REST APIサーバー
-│       └── client.py     # キュークライアント
+│       ├── client.py     # キュークライアント
+│       ├── category_limiter.py # カテゴリ別制御（inflight・cooldown・pause）
+│       └── session_manager.py  # MCPセッション管理
 └── references/
     ├── mcp.json          # 元のMCPコンフィグ
     └── tools.json        # 元のツール仕様
@@ -167,7 +169,7 @@ python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
 ```
 .claude/skills/<skill-name>/
 ├── SKILL.md              # 使用方法ドキュメント（軽量版）
-├── queue_config.json     # キュー設定（レートリミット等）
+├── queue_config.json     # キュー設定（レートリミット・カテゴリ制御等）
 ├── scripts/
 │   ├── mcp_async_call.py # コア非同期コーラー
 │   ├── mcp_worker_daemon.py # キューワーカーデーモン

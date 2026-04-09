@@ -1,5 +1,17 @@
 # Changelog
 
+## [lazy-v2.6.3](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.6.3) (2026-04-10)
+
+### Fixed
+- 429 HTTPErrorが `status_code=0` で非429扱いされカテゴリ全体がpauseする問題を修正 (#48)
+  - `.response` 属性が取得できない場合、例外メッセージからステータスコードをフォールバック抽出
+- 同カテゴリ内の複数エンドポイントでsubmitが同時集中する問題を修正
+  - dispatch_once()の1ラウンドでカテゴリあたり最大1ジョブのみdispatch
+
+### Added
+- CHANGELOG.md 作成（lazy-v2.0.0〜の全リリース履歴）
+- README.md にカテゴリ制御・SessionManager・エラーハンドリング・pause/resume CLIの情報を反映
+
 ## [lazy-v2.6.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.6.0) (2026-04-08)
 
 ### Breaking Changes
