@@ -457,3 +457,16 @@ The script handles:
 - Zombie job recovery on worker restart
 
 All errors raise exceptions with descriptive messages.
+
+## Platform Support
+
+This skill works with both Claude Code and Codex CLI:
+
+- **Claude Code**: Place skills in `.claude/skills/`. Invoke with `/skill-name`.
+- **Codex CLI**: Place skills in `.agents/skills/`. Invoke with `$skill-name` or view with `/$skills`.
+
+Use `--codex` flag with `generate_skill.py` to generate skills in `.agents/skills/`:
+
+```bash
+python generate_skill.py -m mcp.json --lazy --codex
+```
