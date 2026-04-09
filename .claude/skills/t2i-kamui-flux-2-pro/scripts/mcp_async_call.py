@@ -915,20 +915,21 @@ def _resolve_db_path(queue_config_path: str | None = None) -> str | None:
     """Resolve the path to jobs.db for SQLite fallback.
 
     Searches for the project root via ``queue_config_path`` (if given) or
-    the current working directory, then checks for ``.claude/queue/jobs.db``.
+    the current working directory, then checks for ``.claude/queue/jobs.db``
+    and ``.agents/queue/jobs.db``.
     """
     from mcp_worker_daemon import find_project_root
 
+    roots = []
     if queue_config_path and os.path.exists(queue_config_path):
-        project_root = find_project_root(queue_config_path)
-        db_path = os.path.join(project_root, ".claude", "queue", "jobs.db")
-        if os.path.exists(db_path):
-            return db_path
+        roots.append(find_project_root(queue_config_path))
+    roots.append(find_project_root(os.getcwd()))
 
-    project_root = find_project_root(os.getcwd())
-    db_path = os.path.join(project_root, ".claude", "queue", "jobs.db")
-    if os.path.exists(db_path):
-        return db_path
+    for project_root in roots:
+        for marker in (".claude", ".agents"):
+            db_path = os.path.join(project_root, marker, "queue", "jobs.db")
+            if os.path.exists(db_path):
+                return db_path
 
     return None
 

@@ -97,7 +97,19 @@ Remove-Item mcp-async-skill.tar.gz
 pip install pyyaml requests
 ```
 
-インストール後、Claude Code がスキルとして自動認識します。スキル生成は以下のように実行：
+**Codex CLI向け:**
+
+展開先を `.agents/skills/` に変更するだけで、Codex CLIでも使用できます：
+
+```bash
+mkdir -p .agents/skills
+curl -fSL -o mcp-async-skill.tar.gz https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/download/lazy-v2.6.3/mcp-async-skill.tar.gz
+tar xzf mcp-async-skill.tar.gz -C .agents/skills/
+rm mcp-async-skill.tar.gz
+pip install pyyaml requests
+```
+
+インストール後、Claude Code / Codex CLI がスキルとして自動認識します。スキル生成は以下のように実行：
 
 ```bash
 # mcp.json内の全サーバーのスキルを生成
@@ -384,6 +396,7 @@ MCP仕様から完全なスキルを生成。
 | `--name, -n` | スキル名（省略時は自動検出、単一サーバーのみ） |
 | `--catalog-url` | カタログYAMLのURL（デフォルト: GitHub） |
 | `--lazy, -l` | 最小限のSKILL.mdを生成（ツール定義は references/tools/*.yaml に委譲） |
+| `--codex` | Codex CLI向けに `.agents/skills/` に生成 |
 
 ## 生成されるスキル構造
 

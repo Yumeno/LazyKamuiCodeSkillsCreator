@@ -1,5 +1,16 @@
 # Changelog
 
+## [lazy-v2.7.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.7.0) (2026-04-10)
+
+### Added
+- **Codex CLI対応** (#49): `.agents/skills/` への生成をサポート
+  - `generate_skill.py --codex` フラグで `.agents/skills/` にスキル生成
+  - `find_project_root()` が `.agents/` ディレクトリも探索
+  - キューディレクトリ探索（`.claude/queue/` / `.agents/queue/`）の両対応
+  - `_resolve_db_path()` が両パスを探索
+  - SKILL.md にClaude Code / Codex CLI両方の使用方法を記載
+  - README.md にCodex CLIインストール手順を追加
+
 ## [lazy-v2.6.3](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.6.3) (2026-04-10)
 
 ### Fixed

@@ -1278,8 +1278,14 @@ def generate_skill(
     return str(skill_dir)
 
 
-def get_default_output_dir() -> str:
-    """Get default output directory (.claude/skills relative to cwd)."""
+def get_default_output_dir(codex: bool = False) -> str:
+    """Get default output directory.
+
+    Args:
+        codex: If True, use .agents/skills (Codex CLI). Otherwise .claude/skills (Claude Code).
+    """
+    if codex:
+        return str(Path.cwd() / ".agents" / "skills")
     return str(Path.cwd() / ".claude" / "skills")
 
 
@@ -1511,8 +1517,14 @@ Examples:
                         help=f"URL to mcp_tool_catalog.yaml (default: {CATALOG_URL})")
     parser.add_argument("--lazy", "-l", action="store_true",
                         help="Generate minimal SKILL.md (tool definitions in references/tools/*.yaml)")
+    parser.add_argument("--codex", action="store_true",
+                        help="Generate skills for Codex CLI (.agents/skills/ instead of .claude/skills/)")
 
     args = parser.parse_args()
+
+    # Override output dir for Codex CLI if --codex and no explicit --output
+    if args.codex and args.output == default_output:
+        args.output = get_default_output_dir(codex=True)
 
     # Legacy mode: tools.info specified (single server only)
     if args.tools_info:

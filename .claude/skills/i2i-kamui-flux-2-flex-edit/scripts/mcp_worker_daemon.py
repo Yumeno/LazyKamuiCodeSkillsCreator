@@ -29,19 +29,22 @@ from job_queue.worker import WorkerApp
 
 
 def find_project_root(start_path):
-    """Find the project root by traversing upward looking for .claude/ directory.
+    """Find the project root by traversing upward looking for .claude/ or .agents/.
+
+    Supports both Claude Code (.claude/) and Codex CLI (.agents/) project layouts.
 
     Args:
         start_path: File or directory path to start searching from.
 
     Returns:
-        Path to the project root (directory containing .claude/).
+        Path to the project root (directory containing .claude/ or .agents/).
         Falls back to the parent directory of start_path if not found.
     """
     current = os.path.dirname(os.path.abspath(start_path))
     while True:
-        if os.path.isdir(os.path.join(current, ".claude")):
-            return current
+        for marker in (".claude", ".agents"):
+            if os.path.isdir(os.path.join(current, marker)):
+                return current
         parent = os.path.dirname(current)
         if parent == current:
             return os.path.dirname(os.path.abspath(start_path))
@@ -388,7 +391,20 @@ def main():
 
     # Determine project root and queue directory
     project_root = find_project_root(args.config or os.getcwd())
-    queue_dir = os.path.join(project_root, ".claude", "queue")
+    queue_dir = None
+    for marker in (".claude", ".agents"):
+        candidate = os.path.join(project_root, marker, "queue")
+        if os.path.isdir(candidate):
+            queue_dir = candidate
+            break
+    if queue_dir is None:
+        # New project: prefer .claude/ if it exists, else .agents/, else .claude/
+        for marker in (".claude", ".agents"):
+            if os.path.isdir(os.path.join(project_root, marker)):
+                queue_dir = os.path.join(project_root, marker, "queue")
+                break
+        if queue_dir is None:
+            queue_dir = os.path.join(project_root, ".claude", "queue")
     os.makedirs(queue_dir, exist_ok=True)
     db_path = os.path.join(queue_dir, "jobs.db")
 
