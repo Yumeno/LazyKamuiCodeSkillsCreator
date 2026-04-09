@@ -233,6 +233,14 @@ class Dispatcher:
             resp = getattr(e, "response", None)
             status_code = getattr(resp, "status_code", 0) if resp else 0
 
+            # Fallback: extract status code from error message
+            # (e.g. "429 Client Error: Too Many Requests for url: ...")
+            if status_code == 0:
+                import re
+                m = re.match(r"(\d{3})\s", str(e))
+                if m:
+                    status_code = int(m.group(1))
+
             body_text = ""
             if resp is not None:
                 try:
