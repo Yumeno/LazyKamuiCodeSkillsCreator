@@ -1,5 +1,11 @@
 # Changelog
 
+## [lazy-v2.8.1](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.8.1) (2026-04-11)
+
+### Docs
+- README.md のセットアップ文言を更新（`mcp-async-skill` + `queue-dashboard` 同梱を明記）
+- docs/release-process.md のビルド説明・展開テスト・ローカルビルド手順を v2.8.0 の2スキル同梱に合わせて更新
+
 ## [lazy-v2.8.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.8.0) (2026-04-11)
 
 ### Added

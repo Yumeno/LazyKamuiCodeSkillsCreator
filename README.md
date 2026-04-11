@@ -78,7 +78,7 @@ python scripts/mcp_async_call.py \
 
 ### 方法A: curl でインストール（推奨）
 
-プロジェクトルートで実行してください。スキルが `.claude/skills/mcp-async-skill/` に配置されます。
+プロジェクトルートで実行してください。tar.gz には **`mcp-async-skill`**（スキルジェネレーター）と **`queue-dashboard`**（ブラウザ可視化UI）の2つのスキルが含まれ、`.claude/skills/` 配下に展開されます。
 
 **bash (Linux / macOS / WSL / Git Bash):**
 ```bash
