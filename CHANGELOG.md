@@ -1,5 +1,20 @@
 # Changelog
 
+## [lazy-v2.7.1](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.7.1) (2026-04-11)
+
+### Added
+- **タイムゾーン明示化**: DBタイムスタンプにZサフィックスを付与しUTCを明示
+  - `insert_job` / `update_status` がPython側で `datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")` を生成
+  - `/api/stats`, `/api/jobs`, `/api/jobs/{id}`, `/api/categories` レスポンスに `server_time_utc` を追加
+  - 各ジョブに `created_age_seconds` / `updated_age_seconds` を追加（LLMが相対時間を正しく判断できるように）
+- 既存DBのZなしレコードもUTCとしてパースするフォールバック処理
+- SKILL.mdにタイムゾーン取り扱いセクション追加
+
+### Background
+- kamuicode MCPサーバーのレスポンスはUTC
+- LLMの `currentDate` はユーザーローカル時刻（JST等）の場合があり、DBタイムスタンプとの比較で誤判断が起こりうる
+- `age_seconds` を使えばタイムゾーン非依存で相対時間を判断できる
+
 ## [lazy-v2.7.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.7.0) (2026-04-10)
 
 ### Added

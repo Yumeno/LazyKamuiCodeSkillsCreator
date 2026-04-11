@@ -458,6 +458,17 @@ The script handles:
 
 All errors raise exceptions with descriptive messages.
 
+## Timestamps & Timezones
+
+**All timestamps stored in the queue DB and returned by the worker API are in UTC.**
+
+- `created_at` / `updated_at` use ISO 8601 with `Z` suffix: `2026-04-11T01:23:45.678901Z`
+- `/api/stats`, `/api/jobs`, `/api/jobs/{id}` responses include `server_time_utc` as the reference "now"
+- Job listing responses include `created_age_seconds` / `updated_age_seconds` — **use these for "how long ago" judgments instead of computing from timestamps yourself**
+- The kamuicode MCP server also returns timestamps in UTC
+
+**For LLMs using this skill:** Your `currentDate` may be in the user's local timezone (e.g., JST). **Do not compare DB timestamps directly against your `currentDate`** — use `age_seconds` fields or convert timestamps to UTC first. The `server_time_utc` field gives you a reliable "now" in UTC.
+
 ## Platform Support
 
 This skill works with both Claude Code and Codex CLI:

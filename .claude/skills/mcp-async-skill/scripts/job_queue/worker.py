@@ -6,8 +6,10 @@ returns job status, and runs a background dispatcher for execution.
 """
 import json
 import logging
+import re
 import threading
 import time
+from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Callable
 
@@ -15,6 +17,46 @@ logger = logging.getLogger(__name__)
 
 from . import db
 from .dispatcher import Dispatcher, QueueConfig
+
+
+def _utc_now_iso() -> str:
+    """Return current UTC time as ISO 8601 with Z suffix."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _parse_db_timestamp(ts: str | None) -> datetime | None:
+    """Parse a timestamp stored in the DB as a timezone-aware datetime (UTC).
+
+    Handles both the new Z-suffixed format and the legacy un-suffixed format
+    (which was also UTC but without timezone marker).
+    """
+    if not ts:
+        return None
+    try:
+        # Normalize: strip trailing Z and microsecond fraction length variations
+        s = ts.rstrip("Z")
+        # datetime.fromisoformat accepts "2026-04-11T01:23:45.678901" form
+        try:
+            parsed = datetime.fromisoformat(s)
+        except ValueError:
+            # Fallback: try stripping the fractional part
+            parsed = datetime.strptime(
+                re.sub(r"\.\d+$", "", s), "%Y-%m-%dT%H:%M:%S"
+            )
+        # Legacy records have no tzinfo — treat as UTC
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except Exception:
+        return None
+
+
+def _age_seconds(ts: str | None) -> float | None:
+    """Return seconds elapsed from *ts* (UTC) to now."""
+    dt = _parse_db_timestamp(ts)
+    if dt is None:
+        return None
+    return (datetime.now(timezone.utc) - dt).total_seconds()
 
 
 class _RequestHandler(BaseHTTPRequestHandler):
@@ -68,6 +110,8 @@ class _RequestHandler(BaseHTTPRequestHandler):
             )
             job_list = []
             for j in jobs:
+                created_age = _age_seconds(j["created_at"])
+                updated_age = _age_seconds(j["updated_at"])
                 entry = {
                     "job_id": j["id"],
                     "endpoint": j["endpoint"],
@@ -75,6 +119,8 @@ class _RequestHandler(BaseHTTPRequestHandler):
                     "status": j["status"],
                     "created_at": j["created_at"],
                     "updated_at": j["updated_at"],
+                    "created_age_seconds": round(created_age, 1) if created_age is not None else None,
+                    "updated_age_seconds": round(updated_age, 1) if updated_age is not None else None,
                     "error": j["error"],
                 }
                 if include_args:
@@ -84,6 +130,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
                         entry["args"] = j["args"]
                 job_list.append(entry)
             self._send_json(200, {
+                "server_time_utc": _utc_now_iso(),
                 "total": len(jobs),
                 "jobs": job_list,
             })
@@ -93,6 +140,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
             stats = app.store.get_stats_by_endpoint()
             cat_status = app.dispatcher.category_limiter.get_all_status()
             self._send_json(200, {
+                "server_time_utc": _utc_now_iso(),
                 "endpoints": stats,
                 "category_limits": cat_status,
             })
@@ -100,7 +148,10 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
         if self.path == "/api/categories":
             cat_status = app.dispatcher.category_limiter.get_all_status()
-            self._send_json(200, {"categories": cat_status})
+            self._send_json(200, {
+                "server_time_utc": _utc_now_iso(),
+                "categories": cat_status,
+            })
             return
 
         if self.path.startswith("/api/jobs/"):
@@ -112,11 +163,21 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
             job = app.store.get_job(job_id)
             if job is None:
-                self._send_json(404, {"error": "Job not found"})
+                self._send_json(404, {
+                    "server_time_utc": _utc_now_iso(),
+                    "error": "Job not found",
+                })
                 return
+            created_age = _age_seconds(job["created_at"])
+            updated_age = _age_seconds(job["updated_at"])
             resp_data = {
+                "server_time_utc": _utc_now_iso(),
                 "job_id": job["id"],
                 "status": job["status"],
+                "created_at": job["created_at"],
+                "updated_at": job["updated_at"],
+                "created_age_seconds": round(created_age, 1) if created_age is not None else None,
+                "updated_age_seconds": round(updated_age, 1) if updated_age is not None else None,
                 "result": job["result"],
                 "error": job["error"],
                 "remote_job_id": job["remote_job_id"],
