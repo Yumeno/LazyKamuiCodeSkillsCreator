@@ -31,12 +31,19 @@ git push origin lazy-v2.0.0
 
 タグ push をトリガーに、以下が自動実行されます：
 
-1. **tar.gz ビルド** — `.claude/skills/mcp-async-skill/` から必要ファイルを収集し `mcp-async-skill.tar.gz` を作成
-   - `scripts/generate_skill.py`
-   - `scripts/mcp_async_call.py`
-   - `scripts/mcp_worker_daemon.py`
-   - `scripts/job_queue/` パッケージ一式
-   - `SKILL.md`
+1. **tar.gz ビルド** — 以下2つのスキルを同梱し `mcp-async-skill.tar.gz` を作成
+   - **`mcp-async-skill`** — スキルジェネレーター本体
+     - `scripts/generate_skill.py`
+     - `scripts/mcp_async_call.py`
+     - `scripts/mcp_worker_daemon.py`
+     - `scripts/job_queue/*.py`（全ファイル）
+     - `SKILL.md`
+   - **`queue-dashboard`** — ブラウザ可視化UI
+     - `scripts/queue_dashboard.py`
+     - `scripts/static/index.html`
+     - `scripts/static/dashboard.css`
+     - `scripts/static/dashboard.js`
+     - `SKILL.md`
    - テスト・`__pycache__` は除外
 2. **GitHub Release 作成** — タグ名でリリースを作成し、tar.gz をアセットとしてアップロード
 3. **リリースノート自動生成** — インストールコマンド（bash / PowerShell）を含むノートが自動記載
@@ -51,11 +58,20 @@ curl -fSL -o /tmp/mcp-async-skill.tar.gz \
 tar xzf /tmp/mcp-async-skill.tar.gz -C /tmp/test-project/.claude/skills/
 
 # 展開結果の確認
+ls /tmp/test-project/.claude/skills/
+# → mcp-async-skill/  queue-dashboard/
+
 ls /tmp/test-project/.claude/skills/mcp-async-skill/
+# → SKILL.md  scripts/
+
+ls /tmp/test-project/.claude/skills/queue-dashboard/
 # → SKILL.md  scripts/
 
 # generate_skill.py の動作確認
 python3 /tmp/test-project/.claude/skills/mcp-async-skill/scripts/generate_skill.py --help
+
+# queue_dashboard.py の動作確認（Ctrl+Cで停止）
+python3 /tmp/test-project/.claude/skills/queue-dashboard/scripts/queue_dashboard.py --help
 ```
 
 ## バージョニング規則
@@ -75,11 +91,12 @@ lazy-v* タグ push
   │
   ├─ checkout
   ├─ .claude/skills/mcp-async-skill/ からスクリプトを収集
-  ├─ mcp-async-skill.tar.gz を作成（テスト等は除外）
+  ├─ .claude/skills/queue-dashboard/ からUIファイルを収集
+  ├─ mcp-async-skill.tar.gz を作成（両スキル同梱、テスト等は除外）
   └─ GitHub Release を作成し tar.gz をアセットとしてアップロード
 ```
 
-ユーザーは GitHub Releases から tar.gz をダウンロードし、プロジェクトの `.claude/skills/` に展開します。
+ユーザーは GitHub Releases から tar.gz をダウンロードし、プロジェクトの `.claude/skills/` に展開します。展開すると `mcp-async-skill/` と `queue-dashboard/` の2つのスキルが配置されます。
 
 ## トラブルシューティング
 
@@ -99,27 +116,35 @@ lazy-v* タグ push
 ### ローカルで tar.gz をビルドして確認したい場合
 
 ```bash
-SRC=.claude/skills/mcp-async-skill
 STAGING=$(mktemp -d)
-DST=$STAGING/mcp-async-skill
 
+# --- mcp-async-skill ---
+SRC=.claude/skills/mcp-async-skill
+DST=$STAGING/mcp-async-skill
 mkdir -p $DST/scripts/job_queue
 cp $SRC/scripts/generate_skill.py $DST/scripts/
 cp $SRC/scripts/mcp_async_call.py $DST/scripts/
 cp $SRC/scripts/mcp_worker_daemon.py $DST/scripts/
-cp $SRC/scripts/job_queue/__init__.py $DST/scripts/job_queue/
-cp $SRC/scripts/job_queue/db.py $DST/scripts/job_queue/
-cp $SRC/scripts/job_queue/dispatcher.py $DST/scripts/job_queue/
-cp $SRC/scripts/job_queue/worker.py $DST/scripts/job_queue/
-cp $SRC/scripts/job_queue/client.py $DST/scripts/job_queue/
+cp $SRC/scripts/job_queue/*.py $DST/scripts/job_queue/
 cp $SRC/SKILL.md $DST/
 
-tar czf mcp-async-skill.tar.gz -C $STAGING mcp-async-skill
+# --- queue-dashboard ---
+QD_SRC=.claude/skills/queue-dashboard
+QD_DST=$STAGING/queue-dashboard
+mkdir -p $QD_DST/scripts/static
+cp $QD_SRC/SKILL.md $QD_DST/
+cp $QD_SRC/scripts/queue_dashboard.py $QD_DST/scripts/
+cp $QD_SRC/scripts/static/index.html $QD_DST/scripts/static/
+cp $QD_SRC/scripts/static/dashboard.css $QD_DST/scripts/static/
+cp $QD_SRC/scripts/static/dashboard.js $QD_DST/scripts/static/
+
+tar czf mcp-async-skill.tar.gz -C $STAGING mcp-async-skill queue-dashboard
 echo "Built: mcp-async-skill.tar.gz ($(du -h mcp-async-skill.tar.gz | cut -f1))"
 
 # 展開テスト
 TEST_DIR=$(mktemp -d)
 mkdir -p $TEST_DIR/.claude/skills
 tar xzf mcp-async-skill.tar.gz -C $TEST_DIR/.claude/skills/
-ls $TEST_DIR/.claude/skills/mcp-async-skill/
+ls $TEST_DIR/.claude/skills/
+# → mcp-async-skill/  queue-dashboard/
 ```
