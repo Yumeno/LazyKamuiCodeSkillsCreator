@@ -15,22 +15,31 @@ jobs:
 
       - name: Build tar.gz
         run: |
-          SRC=.claude/skills/mcp-async-skill
           STAGING=$(mktemp -d)
-          DST=$STAGING/mcp-async-skill
 
+          # --- mcp-async-skill ---
+          SRC=.claude/skills/mcp-async-skill
+          DST=$STAGING/mcp-async-skill
           mkdir -p $DST/scripts/job_queue
 
-          # Copy scripts (all .py files, no tests, no __pycache__)
           cp $SRC/scripts/generate_skill.py $DST/scripts/
           cp $SRC/scripts/mcp_async_call.py $DST/scripts/
           cp $SRC/scripts/mcp_worker_daemon.py $DST/scripts/
           cp $SRC/scripts/job_queue/*.py $DST/scripts/job_queue/
-
-          # Copy SKILL.md and queue config example
           cp $SRC/SKILL.md $DST/
 
-          tar czf mcp-async-skill.tar.gz -C $STAGING mcp-async-skill
+          # --- queue-dashboard (bundled alongside) ---
+          QD_SRC=.claude/skills/queue-dashboard
+          QD_DST=$STAGING/queue-dashboard
+          mkdir -p $QD_DST/scripts/static
+
+          cp $QD_SRC/SKILL.md $QD_DST/
+          cp $QD_SRC/scripts/queue_dashboard.py $QD_DST/scripts/
+          cp $QD_SRC/scripts/static/index.html $QD_DST/scripts/static/
+          cp $QD_SRC/scripts/static/dashboard.css $QD_DST/scripts/static/
+          cp $QD_SRC/scripts/static/dashboard.js $QD_DST/scripts/static/
+
+          tar czf mcp-async-skill.tar.gz -C $STAGING mcp-async-skill queue-dashboard
 
       - name: Create GitHub Release
         env:

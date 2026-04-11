@@ -1,0 +1,219 @@
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, "Segoe UI", "Hiragino Sans", sans-serif;
+  margin: 0;
+  background: #1a1a1a;
+  color: #eee;
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 1em;
+  padding: 1em;
+  background: #252525;
+  border-bottom: 1px solid #444;
+}
+header h1 { margin: 0; font-size: 1.2em; }
+#server-time { color: #999; font-size: 0.85em; }
+#status-indicator { font-size: 1.5em; margin-left: auto; color: #666; }
+#error-banner {
+  background: #4a1a1a;
+  color: #fcc;
+  padding: 0.6em 1em;
+  border-bottom: 1px solid #833;
+}
+section { padding: 1em; }
+h2 {
+  margin-top: 0;
+  border-bottom: 1px solid #444;
+  padding-bottom: 0.3em;
+  font-size: 1.05em;
+}
+
+/* Summary cards */
+#summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1em;
+}
+.card {
+  background: #252525;
+  padding: 1em;
+  border-radius: 6px;
+  text-align: center;
+}
+.card h3 { margin: 0 0 0.5em; font-size: 0.9em; color: #aaa; }
+.card > div:last-child { font-size: 2em; font-weight: bold; }
+
+/* Categories */
+#category-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1em;
+}
+.category-card {
+  background: #252525;
+  padding: 1em;
+  border-radius: 6px;
+  border-left: 4px solid limegreen;
+}
+.category-card.paused { border-left-color: orange; }
+.category-card h3 { margin: 0 0 0.5em; }
+.category-card div { font-size: 0.9em; margin: 0.2em 0; }
+.category-card button {
+  margin-top: 0.5em;
+  padding: 0.4em 1em;
+  background: #333;
+  color: #eee;
+  border: 1px solid #555;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.category-card button:hover { background: #444; }
+.category-card .reason {
+  background: #1a1a1a;
+  padding: 0.5em;
+  font-size: 0.75em;
+  max-height: 120px;
+  overflow: auto;
+  margin: 0.5em 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Endpoints */
+#endpoint-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+#endpoint-table th,
+#endpoint-table td {
+  padding: 0.5em;
+  border-bottom: 1px solid #333;
+  text-align: left;
+}
+#endpoint-table th { color: #aaa; font-weight: normal; }
+#endpoint-table td:first-child {
+  font-family: monospace;
+  font-size: 0.85em;
+  max-width: 500px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Jobs */
+#job-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+  margin-bottom: 0.5em;
+  flex-wrap: wrap;
+}
+#job-filter button {
+  padding: 0.4em 1em;
+  background: #333;
+  color: #eee;
+  border: 1px solid #555;
+  cursor: pointer;
+  border-radius: 3px;
+}
+#job-filter button:hover { background: #444; }
+#job-filter button.active { background: #555; }
+#limit-input {
+  width: 70px;
+  padding: 0.3em;
+  background: #333;
+  color: #eee;
+  border: 1px solid #555;
+  border-radius: 3px;
+}
+
+#job-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.job-item {
+  padding: 0.5em;
+  border-bottom: 1px solid #333;
+  cursor: pointer;
+  display: flex;
+  gap: 1em;
+  align-items: center;
+}
+.job-item:hover { background: #2a2a2a; }
+.badge {
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 0.75em;
+  font-weight: bold;
+  min-width: 80px;
+  text-align: center;
+  text-transform: uppercase;
+}
+.status-pending .badge { background: #666; color: #fff; }
+.status-running .badge,
+.status-polling .badge { background: #07c; color: #fff; }
+.status-recovering .badge { background: #a70; color: #fff; }
+.status-completed .badge,
+.status-done .badge,
+.status-success .badge { background: #0a7; color: #fff; }
+.status-failed .badge,
+.status-error .badge { background: #c33; color: #fff; }
+.endpoint {
+  flex: 1;
+  font-size: 0.85em;
+  color: #aaa;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.age { color: #888; font-size: 0.8em; white-space: nowrap; }
+.id {
+  font-family: monospace;
+  font-size: 0.75em;
+  color: #666;
+}
+
+/* Modal */
+#job-detail-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal-content {
+  background: #252525;
+  padding: 2em 2em 1em;
+  border-radius: 6px;
+  max-width: 90%;
+  max-height: 85%;
+  overflow: auto;
+  position: relative;
+  min-width: 400px;
+}
+.modal-content .close {
+  position: absolute;
+  top: 0.3em;
+  right: 0.5em;
+  background: none;
+  border: none;
+  color: #eee;
+  font-size: 1.8em;
+  cursor: pointer;
+  line-height: 1;
+}
+.modal-content .close:hover { color: #fff; }
+.modal-content pre {
+  margin: 0;
+  font-size: 0.8em;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 60vh;
+  overflow: auto;
+}
