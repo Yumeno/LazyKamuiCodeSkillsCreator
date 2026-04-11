@@ -26,6 +26,7 @@ Claude Code用のMCPスキルジェネレーター。非同期ジョブパター
 | **カテゴリ別制御** | t2i/i2i/t2v/i2vカテゴリ単位でのinflight制御・429自動リトライ・非429エラー時のカテゴリ即pause | 自動 | |
 | **セッション管理** | MCPセッションをendpoint単位でキャッシュ。認証サーバーへの負荷を削減 | 自動 | |
 | **カテゴリpause/resume** | カテゴリ単位での手動一時停止・再開。他端末との枠共有時に便利 | `--pause-category` | |
+| **Queue Dashboard** | ブラウザから見えるキュー可視化Web UI。サマリー/カテゴリ/ジョブ一覧/失敗詳細/pause-resume。追加依存なし（Python stdlib + Vanilla JS） | 独立スキル | |
 
 ### ⚠️ 実行ディレクトリについて
 
@@ -109,7 +110,17 @@ rm mcp-async-skill.tar.gz
 pip install pyyaml requests
 ```
 
-インストール後、Claude Code / Codex CLI がスキルとして自動認識します。スキル生成は以下のように実行：
+インストール後、Claude Code / Codex CLI がスキルとして自動認識します。
+tar.gz には `mcp-async-skill`（スキルジェネレーター）に加え `queue-dashboard`（ブラウザ可視化UI）も同梱されます。
+
+**Queue Dashboard の起動（任意）:**
+
+```bash
+python .claude/skills/queue-dashboard/scripts/queue_dashboard.py
+# → http://127.0.0.1:54322/ が自動で開く
+```
+
+スキル生成は以下のように実行：
 
 ```bash
 # mcp.json内の全サーバーのスキルを生成

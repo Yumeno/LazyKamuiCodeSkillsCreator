@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Queue Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <header>
+    <h1>Queue Dashboard</h1>
+    <span id="server-time"></span>
+    <span id="status-indicator" title="Connection status">●</span>
+  </header>
+
+  <div id="error-banner" hidden></div>
+
+  <section id="summary">
+    <div class="card"><h3>Pending</h3><div id="count-pending">-</div></div>
+    <div class="card"><h3>Running</h3><div id="count-running">-</div></div>
+    <div class="card"><h3>Completed</h3><div id="count-completed">-</div></div>
+    <div class="card"><h3>Failed</h3><div id="count-failed">-</div></div>
+  </section>
+
+  <section id="categories">
+    <h2>Categories</h2>
+    <div id="category-grid"></div>
+  </section>
+
+  <section id="endpoints">
+    <h2>Endpoints</h2>
+    <table id="endpoint-table">
+      <thead>
+        <tr><th>Endpoint</th><th>Pending</th><th>Running</th><th>Completed</th><th>Failed</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section id="jobs">
+    <h2>Recent Jobs</h2>
+    <div id="job-filter">
+      <button data-filter="all" class="active">All</button>
+      <button data-filter="pending">Pending</button>
+      <button data-filter="running">Running</button>
+      <button data-filter="polling">Polling</button>
+      <button data-filter="completed">Completed</button>
+      <button data-filter="failed">Failed</button>
+      <label style="margin-left:auto">
+        Limit:
+        <input id="limit-input" type="number" value="50" min="1" max="500" step="10">
+      </label>
+    </div>
+    <ul id="job-list"></ul>
+  </section>
+
+  <div id="job-detail-modal" hidden role="dialog" aria-modal="true">
+    <div class="modal-content">
+      <button class="close" aria-label="Close">×</button>
+      <pre id="job-detail-content"></pre>
+    </div>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>

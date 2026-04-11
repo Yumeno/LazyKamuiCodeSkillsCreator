@@ -1,5 +1,18 @@
 # Changelog
 
+## [lazy-v2.8.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.8.0) (2026-04-11)
+
+### Added
+- **Queue Dashboard** — 新規独立スキル `queue-dashboard` (#50)
+  - ブラウザから見えるキュー可視化Web UI（Python stdlibのみ、Vanilla JS）
+  - `python .claude/skills/queue-dashboard/scripts/queue_dashboard.py` で起動 → `http://127.0.0.1:54322/` 自動オープン
+  - サマリー（pending/running/completed/failed）、カテゴリ状態、エンドポイント統計、最近のジョブ一覧
+  - カテゴリ pause/resume ボタン、ジョブクリックで詳細モーダル
+  - **セキュリティ**: 許可パスホワイトリスト、1 MiBリクエスト上限、10秒タイムアウト、127.0.0.1 バインド既定
+  - **UX**: 2秒ポーリング、エラー時指数バックオフ、非表示タブ時の間引き、Escape/背景クリックでモーダル閉
+  - 同一originプロキシで `/api/*` を既存ワーカー(54321)へ中継 → CORS不要
+- `release.yml` に queue-dashboard を同梱する配布ステップを追加
+
 ## [lazy-v2.7.1](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.7.1) (2026-04-11)
 
 ### Added
