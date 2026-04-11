@@ -10,6 +10,16 @@ import uuid
 from datetime import datetime, timezone
 
 
+def _utc_now_iso() -> str:
+    """Return current UTC time as ISO 8601 with Z suffix.
+
+    Example: ``2026-04-11T01:23:45.678901Z``
+    The Z suffix explicitly marks the timestamp as UTC so that LLMs and
+    other consumers can correctly convert to local time.
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 class JobStore:
     """SQLite-backed job store for the queue system."""
 
@@ -55,12 +65,13 @@ class JobStore:
         """Insert a new job and return its ID."""
         with self._lock:
             job_id = str(uuid.uuid4())
+            now = _utc_now_iso()
             self.conn.execute(
                 """
-                INSERT INTO jobs (id, endpoint, submit_tool, args, status_tool, result_tool, headers)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO jobs (id, endpoint, submit_tool, args, status_tool, result_tool, headers, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (job_id, endpoint, submit_tool, args, status_tool, result_tool, headers),
+                (job_id, endpoint, submit_tool, args, status_tool, result_tool, headers, now, now),
             )
             self.conn.commit()
             return job_id
@@ -85,8 +96,8 @@ class JobStore:
     ):
         """Update job status and optional fields."""
         with self._lock:
-            fields = ["status = ?", "updated_at = strftime('%Y-%m-%dT%H:%M:%f', 'now')"]
-            params: list = [status]
+            fields = ["status = ?", "updated_at = ?"]
+            params: list = [status, _utc_now_iso()]
 
             if session_id is not None:
                 fields.append("session_id = ?")
