@@ -1,5 +1,11 @@
 # Changelog
 
+## [lazy-v2.8.2](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.8.2) (2026-04-12)
+
+### Fixed
+- queue-dashboard: モーダルオーバーレイがページ読み込み時に常時表示される問題を修正 (#51)
+  - CSSの `display:flex` が HTML `hidden` 属性を上書きしていた
+
 ## [lazy-v2.8.1](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.8.1) (2026-04-11)
 
 ### Docs
