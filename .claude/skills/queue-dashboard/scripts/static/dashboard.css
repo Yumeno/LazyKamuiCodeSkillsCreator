@@ -178,6 +178,9 @@ h2 {
 }
 
 /* Modal */
+#job-detail-modal[hidden] {
+  display: none;
+}
 #job-detail-modal {
   position: fixed;
   inset: 0;
