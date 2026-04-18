@@ -4,9 +4,13 @@
 Manages per-category (t2i, i2i, t2v, i2v) dispatch gating:
 - Inflight control (submit concurrency per category)
 - Rolling-window cooldown after 429 responses
-- Automatic pause after consecutive 429 errors
 - Immediate pause with detailed reason on non-429 submit errors
 - Manual pause/resume with category state reporting
+
+429 errors trigger a cooldown but do NOT auto-pause the category.
+The job is returned to pending and retried after the cooldown expires.
+Only non-429 errors (which consume server quota) trigger an immediate
+category pause to prevent further quota waste.
 """
 import logging
 import threading
@@ -22,7 +26,7 @@ DEFAULT_ALIASES: dict[str, str] = {"r2i": "i2i", "r2v": "i2v"}
 
 
 class CategoryLimiter:
-    """Category limiter with inflight control, rolling cooldown, and auto-pause."""
+    """Category limiter with inflight control, rolling cooldown, and error pause."""
 
     def __init__(self, config: dict | None = None):
         config = config or {}
@@ -41,7 +45,7 @@ class CategoryLimiter:
             **config.get("aliases", {}),
         }
 
-        # Pause state
+        # Pause state (only for non-429 errors and manual pause)
         self._paused: set[str] = set()
         self._pause_reason: dict[str, dict] = {}
 
@@ -57,11 +61,8 @@ class CategoryLimiter:
         self._exhaust_time: dict[str, float] = {}
         self._exhaust_cooldown: float = float(config.get("exhaust_cooldown", 3600.0))
 
-        # Consecutive 429 auto-pause
+        # 429 counter (informational — does NOT trigger auto-pause)
         self._consecutive_429: dict[str, int] = {}
-        self._auto_pause_threshold: int = int(
-            config.get("auto_pause_after_consecutive_429", 25)
-        )
 
         self._lock = threading.Lock()
 
@@ -167,7 +168,7 @@ class CategoryLimiter:
             self._inflight[category] = max(0, self._inflight.get(category, 0) - 1)
 
     # ------------------------------------------------------------------
-    # 429 handling (cooldown + consecutive counter)
+    # 429 handling (cooldown only — no auto-pause)
     # ------------------------------------------------------------------
 
     def force_cooldown(self, category: str):
@@ -178,26 +179,26 @@ class CategoryLimiter:
             self._exhaust_time[category] = time.monotonic()
 
     def record_429(self, category: str):
-        """Increment consecutive 429 counter. Auto-pauses if threshold reached."""
+        """Increment consecutive 429 counter (informational only).
+
+        Unlike previous versions, this does NOT auto-pause the category.
+        The cooldown from ``force_cooldown`` is sufficient — once it expires,
+        the dispatcher will automatically retry pending jobs.
+        """
         if category is None:
             return
         with self._lock:
             count = self._consecutive_429.get(category, 0) + 1
             self._consecutive_429[category] = count
-            if count >= self._auto_pause_threshold:
-                self._paused.add(category)
-                self._pause_reason[category] = {
-                    "reason": "consecutive_429",
-                    "count": count,
-                    "paused_at": datetime.now(timezone.utc).isoformat(),
-                }
-                logger.warning(
-                    "[CategoryLimiter] Auto-paused %s after %d consecutive 429s",
+            if count % 10 == 0:
+                logger.info(
+                    "[CategoryLimiter] %s has hit %d consecutive 429s "
+                    "(cooldown handles retry automatically)",
                     category, count,
                 )
 
     # ------------------------------------------------------------------
-    # Error-triggered pause (non-429)
+    # Error-triggered pause (non-429 only)
     # ------------------------------------------------------------------
 
     def pause_with_reason(
