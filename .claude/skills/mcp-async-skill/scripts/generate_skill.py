@@ -1002,7 +1002,6 @@ def generate_queue_config(endpoint: str) -> dict:
             "min_interval": 1.0,
             "max_category_inflight": 1,
             "exhaust_cooldown": 3600,
-            "auto_pause_after_consecutive_429": 25,
         },
     }
 
