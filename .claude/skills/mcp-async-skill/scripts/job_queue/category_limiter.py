@@ -168,6 +168,34 @@ class CategoryLimiter:
             self._inflight[category] = max(0, self._inflight.get(category, 0) - 1)
 
     # ------------------------------------------------------------------
+    # Runtime config setters
+    # ------------------------------------------------------------------
+
+    def set_max_inflight(self, value: int):
+        """Change max concurrent inflight jobs per category at runtime."""
+        with self._lock:
+            self._max_inflight = max(1, int(value))
+
+    def set_min_interval(self, value: float):
+        """Change minimum interval between submits at runtime."""
+        with self._lock:
+            self._min_interval = max(0.0, float(value))
+
+    def set_exhaust_cooldown(self, value: float):
+        """Change 429 cooldown duration at runtime."""
+        with self._lock:
+            self._exhaust_cooldown = max(0.0, float(value))
+
+    def get_config(self) -> dict:
+        """Return current runtime configuration values."""
+        with self._lock:
+            return {
+                "max_inflight": self._max_inflight,
+                "min_interval": self._min_interval,
+                "exhaust_cooldown": self._exhaust_cooldown,
+            }
+
+    # ------------------------------------------------------------------
     # 429 handling (cooldown only — no auto-pause)
     # ------------------------------------------------------------------
 

@@ -9,6 +9,7 @@ let currentFilter = "all";
 let limit = LIMIT_DEFAULT;
 let consecutiveErrors = 0;
 let refreshTimer = null;
+let workerConnected = false;
 
 async function fetchJSON(path, init) {
   const r = await fetch(path, init);
@@ -37,16 +38,20 @@ async function refresh() {
       fetchJSON("/api/stats"),
       fetchJSON(`/api/jobs?limit=${limit}`),
     ]);
+    workerConnected = true;
     renderSummary(stats);
     renderCategories(stats.category_limits || {});
     renderEndpoints(stats.endpoints || []);
     renderJobs(jobs.jobs || []);
     renderClock(stats.server_time_utc);
     setStatus(true, null);
+    updateWorkerButtons(true);
     consecutiveErrors = 0;
   } catch (e) {
     consecutiveErrors++;
+    workerConnected = false;
     setStatus(false, e.message);
+    updateWorkerButtons(false);
   } finally {
     scheduleRefresh();
   }
@@ -69,7 +74,7 @@ function setStatus(ok, errMsg) {
 function renderClock(serverUtc) {
   const el = document.getElementById("server-time");
   const local = new Date().toLocaleTimeString();
-  el.textContent = `Local: ${local} | Server UTC: ${serverUtc || "-"}`;
+  el.textContent = `Local: ${local} | UTC: ${serverUtc || "-"}`;
 }
 
 function renderSummary(stats) {
@@ -182,8 +187,7 @@ function renderJobs(jobs) {
   }
   for (const j of filtered) {
     const age = j.updated_age_seconds != null
-      ? `${Math.round(j.updated_age_seconds)}s ago`
-      : "";
+      ? `${Math.round(j.updated_age_seconds)}s ago` : "";
     const shortId = (j.job_id || "").slice(0, 8);
     const status = j.status || "unknown";
     const li = el("li", {
@@ -191,17 +195,9 @@ function renderJobs(jobs) {
       onclick: () => showJobDetail(j.job_id),
     },
       el("span", { class: "badge", text: status }),
-      el("span", {
-        class: "endpoint",
-        title: j.endpoint || "",
-        text: j.endpoint || "",
-      }),
+      el("span", { class: "endpoint", title: j.endpoint || "", text: j.endpoint || "" }),
       el("span", { class: "age", text: age }),
-      el("span", {
-        class: "id",
-        title: j.job_id || "",
-        text: shortId,
-      }),
+      el("span", { class: "id", title: j.job_id || "", text: shortId }),
     );
     list.appendChild(li);
   }
@@ -214,7 +210,7 @@ async function showJobDetail(jobId) {
     const pretty = JSON.stringify(data, null, 2);
     const content = document.getElementById("job-detail-content");
     content.textContent = pretty.length > 50000
-      ? pretty.slice(0, 50000) + "\n\n... (truncated, see full JSON via CLI)"
+      ? pretty.slice(0, 50000) + "\n\n... (truncated)"
       : pretty;
     openModal();
   } catch (e) {
@@ -224,10 +220,7 @@ async function showJobDetail(jobId) {
 
 async function toggleCategory(cat, currentlyPaused) {
   const action = currentlyPaused ? "resume" : "pause";
-  const confirmMsg = currentlyPaused
-    ? `Resume dispatching for category "${cat}"?`
-    : `Pause dispatching for category "${cat}"?`;
-  if (!confirm(confirmMsg)) return;
+  if (!confirm(`${action} category "${cat}"?`)) return;
   try {
     await fetchJSON(`/api/categories/${cat}/${action}`, { method: "POST" });
     refresh();
@@ -236,16 +229,181 @@ async function toggleCategory(cat, currentlyPaused) {
   }
 }
 
-// Modal
+// ---- Modal ----
 function modalEl() { return document.getElementById("job-detail-modal"); }
-function openModal() {
-  modalEl().hidden = false;
-  document.body.style.overflow = "hidden";
+function openModal() { modalEl().hidden = false; document.body.style.overflow = "hidden"; }
+function closeModal() { modalEl().hidden = true; document.body.style.overflow = ""; }
+
+// ---- Settings Panel ----
+function openConfigPanel() {
+  document.getElementById("config-panel").hidden = false;
+  document.getElementById("config-overlay").hidden = false;
+  loadConfig();
 }
-function closeModal() {
-  modalEl().hidden = true;
-  document.body.style.overflow = "";
+function closeConfigPanel() {
+  document.getElementById("config-panel").hidden = true;
+  document.getElementById("config-overlay").hidden = true;
 }
+
+async function loadConfig() {
+  try {
+    const cfg = await fetchJSON("/api/config");
+    document.getElementById("cfg-max-inflight").value = cfg.category?.max_inflight ?? 1;
+    document.getElementById("cfg-min-interval").value = cfg.category?.min_interval ?? 1.0;
+    document.getElementById("cfg-cooldown").value = cfg.category?.exhaust_cooldown ?? 3600;
+    document.getElementById("cfg-max-concurrent").value = cfg.endpoint?.default_max_concurrent ?? 2;
+    document.getElementById("cfg-ep-interval").value = cfg.endpoint?.default_min_interval ?? 10.0;
+    document.getElementById("cfg-idle-timeout").value = cfg.worker?.idle_timeout ?? 60;
+    showConfigResult("", "");
+  } catch (e) {
+    showConfigResult("Failed to load config: " + e.message, "error");
+  }
+}
+
+async function applyConfig() {
+  const body = {
+    category: {
+      max_inflight: Number(document.getElementById("cfg-max-inflight").value),
+      min_interval: Number(document.getElementById("cfg-min-interval").value),
+      exhaust_cooldown: Number(document.getElementById("cfg-cooldown").value),
+    },
+    endpoint: {
+      default_max_concurrent: Number(document.getElementById("cfg-max-concurrent").value),
+      default_min_interval: Number(document.getElementById("cfg-ep-interval").value),
+    },
+    worker: {
+      idle_timeout: Number(document.getElementById("cfg-idle-timeout").value),
+    },
+  };
+  try {
+    const result = await fetchJSON("/api/config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    let msg = "Applied: " + Object.keys(result.applied || {}).join(", ");
+    if (result.requires_restart?.length > 0)
+      msg += "\nRequires restart: " + result.requires_restart.join(", ");
+    if (Object.keys(result.rejected || {}).length > 0)
+      msg += "\nRejected: " + JSON.stringify(result.rejected);
+    showConfigResult(msg, Object.keys(result.rejected || {}).length > 0 ? "error" : "success");
+    refresh();
+  } catch (e) {
+    showConfigResult("Apply failed: " + e.message, "error");
+  }
+}
+
+function showConfigResult(msg, cls) {
+  const el = document.getElementById("cfg-result");
+  el.textContent = msg;
+  el.className = cls || "";
+}
+
+// ---- Skills ----
+let skillsLoaded = false;
+
+async function loadSkills(forceRefresh = false) {
+  const url = forceRefresh ? "/api/skills?refresh=true" : "/api/skills";
+  try {
+    const data = await fetchJSON(url);
+    renderSkills(data);
+    skillsLoaded = true;
+  } catch (e) {
+    document.getElementById("skills-grid").innerHTML = "";
+    document.getElementById("skills-grid").appendChild(
+      el("div", { text: "Failed to load skills: " + e.message })
+    );
+  }
+}
+
+function renderSkills(data) {
+  const grid = document.getElementById("skills-grid");
+  grid.innerHTML = "";
+  document.getElementById("skills-count").textContent = `(${data.total || 0})`;
+
+  if (!data.items || data.items.length === 0) {
+    grid.appendChild(el("div", { text: "No skills found" }));
+    return;
+  }
+  for (const s of data.items) {
+    const catClass = `skill-cat skill-cat-${s.category || "other"}`;
+    const card = el("div", { class: "skill-card" },
+      el("div", {},
+        el("span", { class: "skill-name", text: s.id }),
+        el("span", { class: catClass, text: s.category || "other" }),
+      ),
+    );
+    if (s.endpoint_url) {
+      card.appendChild(el("div", {
+        class: "skill-ep",
+        title: s.endpoint_url,
+        text: s.endpoint_url,
+      }));
+    }
+    grid.appendChild(card);
+  }
+}
+
+// ---- Worker Management ----
+function updateWorkerButtons(connected) {
+  document.getElementById("btn-start").hidden = connected;
+  document.getElementById("btn-stop").hidden = !connected;
+  document.getElementById("btn-restart").hidden = !connected;
+}
+
+async function startWorker() {
+  document.getElementById("btn-start").disabled = true;
+  document.getElementById("btn-start").textContent = "Starting...";
+  try {
+    const result = await fetchJSON("/api/worker/start", { method: "POST" });
+    if (result.status === "started" || result.status === "already_running") {
+      refresh();
+    } else {
+      alert("Start failed: " + (result.error || result.status));
+    }
+  } catch (e) {
+    alert("Start failed: " + e.message);
+  } finally {
+    document.getElementById("btn-start").disabled = false;
+    document.getElementById("btn-start").textContent = "▶ Start";
+  }
+}
+
+async function stopWorker() {
+  if (!confirm("Stop the worker daemon?")) return;
+  try {
+    await fetchJSON("/api/worker/shutdown", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ timeout: 30 }),
+    });
+    setTimeout(refresh, 2000);
+  } catch (e) {
+    // 502 is expected if worker shuts down before responding
+    setTimeout(refresh, 2000);
+  }
+}
+
+async function restartWorker() {
+  if (!confirm("Restart the worker daemon?")) return;
+  document.getElementById("btn-restart").disabled = true;
+  document.getElementById("btn-restart").textContent = "Restarting...";
+  try {
+    const result = await fetchJSON("/api/worker/restart", { method: "POST" });
+    if (result.status === "started" || result.status === "already_running") {
+      refresh();
+    } else {
+      alert("Restart failed: " + (result.error || result.status));
+    }
+  } catch (e) {
+    alert("Restart failed: " + e.message);
+  } finally {
+    document.getElementById("btn-restart").disabled = false;
+    document.getElementById("btn-restart").textContent = "↻ Restart";
+  }
+}
+
+// ---- Event handlers ----
 
 // Filter buttons
 document.querySelectorAll("#job-filter button").forEach(btn => {
@@ -270,18 +428,35 @@ if (limitInput) {
 }
 
 // Modal close handlers
-document.querySelector("#job-detail-modal .close")
-  .addEventListener("click", closeModal);
-modalEl().addEventListener("click", e => {
-  if (e.target === modalEl()) closeModal(); // background click
-});
+document.querySelector("#job-detail-modal .close").addEventListener("click", closeModal);
+modalEl().addEventListener("click", e => { if (e.target === modalEl()) closeModal(); });
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape" && !modalEl().hidden) closeModal();
+  if (e.key === "Escape") {
+    if (!modalEl().hidden) closeModal();
+    else if (!document.getElementById("config-panel").hidden) closeConfigPanel();
+  }
 });
 
-// Visibility change — refresh immediately when tab becomes visible
+// Settings panel
+document.getElementById("menu-toggle").addEventListener("click", openConfigPanel);
+document.getElementById("panel-close").addEventListener("click", closeConfigPanel);
+document.getElementById("config-overlay").addEventListener("click", closeConfigPanel);
+document.getElementById("cfg-apply").addEventListener("click", applyConfig);
+document.getElementById("cfg-reload").addEventListener("click", loadConfig);
+
+// Skills
+document.getElementById("skills-refresh").addEventListener("click", () => loadSkills(true));
+
+// Worker controls
+document.getElementById("btn-start").addEventListener("click", startWorker);
+document.getElementById("btn-stop").addEventListener("click", stopWorker);
+document.getElementById("btn-restart").addEventListener("click", restartWorker);
+
+// Visibility change
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") refresh();
 });
 
+// Initial load
 refresh();
+loadSkills();

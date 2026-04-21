@@ -57,6 +57,13 @@ class QueueConfig:
         with open(path, encoding="utf-8") as f:
             return cls.from_dict(json.load(f))
 
+    def set_defaults(self, max_concurrent: int | None = None, min_interval: float | None = None):
+        """Update default rate limits at runtime."""
+        if max_concurrent is not None:
+            self.default_max_concurrent = max(1, int(max_concurrent))
+        if min_interval is not None:
+            self.default_min_interval = max(0.0, float(min_interval))
+
     def get_limits(self, endpoint: str) -> tuple[int, float]:
         """Return (max_concurrent_jobs, min_interval_seconds) for an endpoint."""
         return self._endpoint_limits.get(

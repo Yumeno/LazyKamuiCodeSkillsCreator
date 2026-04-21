@@ -6,6 +6,7 @@ returns job status, and runs a background dispatcher for execution.
 """
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -154,6 +155,31 @@ class _RequestHandler(BaseHTTPRequestHandler):
             })
             return
 
+        if self.path == "/api/config":
+            cat_cfg = app.dispatcher.category_limiter.get_config()
+            self._send_json(200, {
+                "category": cat_cfg,
+                "endpoint": {
+                    "default_max_concurrent": app.dispatcher.config.default_max_concurrent,
+                    "default_min_interval": app.dispatcher.config.default_min_interval,
+                },
+                "worker": {
+                    "idle_timeout": app.idle_timeout,
+                    "port": app.port,
+                    "host": app.host,
+                },
+            })
+            return
+
+        if self.path == "/api/worker/status":
+            self._send_json(200, {
+                "pid": os.getpid(),
+                "running": app._running,
+                "active_jobs": app.store.count_all_active_jobs(),
+                "pending_jobs": app.store.count_all_pending_jobs(),
+            })
+            return
+
         if self.path.startswith("/api/jobs/"):
             from urllib.parse import urlparse as _urlparse, parse_qs as _parse_qs
             _parsed = _urlparse(self.path)
@@ -275,6 +301,100 @@ class _RequestHandler(BaseHTTPRequestHandler):
                     resp_data["pause_reason"] = reason
 
             self._send_json(200, resp_data)
+            return
+
+        if self.path == "/api/worker/shutdown":
+            try:
+                body = json.loads(self._read_body() or b"{}")
+            except (json.JSONDecodeError, ValueError):
+                body = {}
+            timeout = min(int(body.get("timeout", 30)), 120)
+            self._send_json(202, {"status": "shutting_down", "timeout": timeout})
+            threading.Thread(target=app.stop, daemon=True).start()
+            return
+
+        self._send_json(404, {"error": "Not found"})
+
+    def do_PATCH(self):  # noqa: N802
+        app: WorkerApp = self.server.app  # type: ignore
+        app.touch()
+
+        if self.path == "/api/config":
+            try:
+                body = json.loads(self._read_body())
+            except (json.JSONDecodeError, ValueError):
+                self._send_json(400, {"error": "Invalid JSON"})
+                return
+
+            applied = {}
+            rejected = {}
+            requires_restart = []
+            limiter = app.dispatcher.category_limiter
+
+            # Category settings
+            cat = body.get("category", {})
+            for key, setter, vtype, vmin in [
+                ("max_inflight", limiter.set_max_inflight, int, 1),
+                ("min_interval", limiter.set_min_interval, float, 0),
+                ("exhaust_cooldown", limiter.set_exhaust_cooldown, float, 0),
+            ]:
+                if key in cat:
+                    v = cat[key]
+                    try:
+                        v = vtype(v)
+                        if v < vmin:
+                            raise ValueError
+                        setter(v)
+                        applied[f"category.{key}"] = v
+                    except (ValueError, TypeError):
+                        rejected[f"category.{key}"] = f"must be {vtype.__name__} >= {vmin}"
+
+            # Endpoint defaults
+            ep = body.get("endpoint", {})
+            ep_mc = ep.get("default_max_concurrent")
+            ep_mi = ep.get("default_min_interval")
+            if ep_mc is not None:
+                try:
+                    ep_mc = int(ep_mc)
+                    if ep_mc < 1:
+                        raise ValueError
+                    applied["endpoint.default_max_concurrent"] = ep_mc
+                except (ValueError, TypeError):
+                    rejected["endpoint.default_max_concurrent"] = "must be int >= 1"
+                    ep_mc = None
+            if ep_mi is not None:
+                try:
+                    ep_mi = float(ep_mi)
+                    if ep_mi < 0:
+                        raise ValueError
+                    applied["endpoint.default_min_interval"] = ep_mi
+                except (ValueError, TypeError):
+                    rejected["endpoint.default_min_interval"] = "must be float >= 0"
+                    ep_mi = None
+            if ep_mc is not None or ep_mi is not None:
+                app.dispatcher.config.set_defaults(
+                    max_concurrent=ep_mc, min_interval=ep_mi,
+                )
+
+            # Worker settings
+            wk = body.get("worker", {})
+            if "idle_timeout" in wk:
+                try:
+                    v = int(wk["idle_timeout"])
+                    if v < 0:
+                        raise ValueError
+                    app.idle_timeout = v
+                    applied["worker.idle_timeout"] = v
+                except (ValueError, TypeError):
+                    rejected["worker.idle_timeout"] = "must be int >= 0"
+            if "port" in wk:
+                requires_restart.append("port")
+
+            self._send_json(200, {
+                "applied": applied,
+                "requires_restart": requires_restart,
+                "rejected": rejected,
+            })
             return
 
         self._send_json(404, {"error": "Not found"})
