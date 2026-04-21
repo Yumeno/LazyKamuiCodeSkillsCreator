@@ -1,5 +1,22 @@
 # Changelog
 
+## [lazy-v2.9.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.9.0) (2026-04-21)
+
+### Added
+- **ダッシュボード設定パネル** — ☰ハンバーガーメニューからスライドイン設定パネル (#54)
+  - カテゴリ設定: max_inflight / min_interval / exhaust_cooldown のリアルタイム変更
+  - エンドポイント設定: default_max_concurrent / default_min_interval のリアルタイム変更
+  - ワーカー設定: idle_timeout のリアルタイム変更
+  - PATCH /api/config でバリデーション付き部分更新
+- **登録済みスキル一覧** — GET /api/skills でスキルメタデータを走査・キャッシュ表示
+- **ワーカー管理** — Start/Stop/Restartボタン
+  - POST /api/worker/shutdown (202 Accepted + graceful停止)
+  - GET /api/worker/status (PID, running状態, ジョブ数)
+  - POST /api/worker/start, /api/worker/restart
+- CategoryLimiter にruntime設定セッター追加
+- QueueConfig に set_defaults() セッター追加
+- worker.py に do_PATCH + GET /api/config 追加
+
 ## [lazy-v2.8.2](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.8.2) (2026-04-12)
 
 ### Fixed

@@ -8,12 +8,47 @@
 </head>
 <body>
   <header>
+    <button id="menu-toggle" aria-label="Settings" title="Settings">☰</button>
     <h1>Queue Dashboard</h1>
     <span id="server-time"></span>
+    <div id="worker-controls">
+      <button id="btn-start" class="wk-btn" hidden title="Start worker">▶ Start</button>
+      <button id="btn-stop" class="wk-btn" hidden title="Stop worker">■ Stop</button>
+      <button id="btn-restart" class="wk-btn" hidden title="Restart worker">↻ Restart</button>
+    </div>
     <span id="status-indicator" title="Connection status">●</span>
   </header>
 
   <div id="error-banner" hidden></div>
+
+  <!-- Settings panel (slide-in from right) -->
+  <aside id="config-panel" hidden>
+    <div class="panel-header">
+      <h2>Settings</h2>
+      <button id="panel-close" aria-label="Close">×</button>
+    </div>
+    <fieldset>
+      <legend>Category Limits</legend>
+      <label>Max Inflight <input id="cfg-max-inflight" type="number" min="1" step="1"></label>
+      <label>Min Interval (s) <input id="cfg-min-interval" type="number" min="0" step="0.1"></label>
+      <label>429 Cooldown (s) <input id="cfg-cooldown" type="number" min="0" step="60"></label>
+    </fieldset>
+    <fieldset>
+      <legend>Endpoint Defaults</legend>
+      <label>Max Concurrent <input id="cfg-max-concurrent" type="number" min="1" step="1"></label>
+      <label>Min Interval (s) <input id="cfg-ep-interval" type="number" min="0" step="0.5"></label>
+    </fieldset>
+    <fieldset>
+      <legend>Worker</legend>
+      <label>Idle Timeout (s) <input id="cfg-idle-timeout" type="number" min="0" step="10"></label>
+    </fieldset>
+    <div class="panel-actions">
+      <button id="cfg-apply">Apply</button>
+      <button id="cfg-reload">Reload Current</button>
+    </div>
+    <div id="cfg-result"></div>
+  </aside>
+  <div id="config-overlay" hidden></div>
 
   <section id="summary">
     <div class="card"><h3>Pending</h3><div id="count-pending">-</div></div>
@@ -25,6 +60,11 @@
   <section id="categories">
     <h2>Categories</h2>
     <div id="category-grid"></div>
+  </section>
+
+  <section id="skills">
+    <h2>Registered Skills <button id="skills-refresh" title="Refresh skill list">↻</button> <span id="skills-count"></span></h2>
+    <div id="skills-grid"></div>
   </section>
 
   <section id="endpoints">
