@@ -115,9 +115,12 @@ tar.gz には `mcp-async-skill`（スキルジェネレーター）に加え `qu
 
 **Queue Dashboard の起動（任意）:**
 
+キューの状態をブラウザで可視化できます。詳しくは [Queue Dashboard](#queue-dashboard) セクションを参照。
+
 ```bash
 python .claude/skills/queue-dashboard/scripts/queue_dashboard.py
-# → http://127.0.0.1:54322/ が自動で開く
+# → http://127.0.0.1:54322/ がブラウザで自動オープン
+# → ☰メニューから設定変更、Start/Stop/Restartでワーカー管理が可能
 ```
 
 スキル生成は以下のように実行：
@@ -627,6 +630,103 @@ flux_lora_result:
 ```
 
 AIはこのYAMLファイル1つを読むだけで、実行に必要な情報をすべて取得できます。
+
+## Queue Dashboard
+
+ブラウザからキューの状態を可視化・制御できるWeb UIです。tar.gz に同梱されており、追加依存なし（Python stdlib + Vanilla JS）で動作します。
+
+### 起動方法
+
+```bash
+python .claude/skills/queue-dashboard/scripts/queue_dashboard.py
+# → http://127.0.0.1:54322/ がブラウザで自動オープン
+```
+
+**オプション:**
+| オプション | デフォルト | 説明 |
+|-----------|-----------|------|
+| `--port` | 54322 | ダッシュボードのHTTPポート |
+| `--worker-url` | `http://127.0.0.1:54321` | ワーカーAPIのベースURL |
+| `--no-open` | false | ブラウザの自動オープンを抑制 |
+| `--host` | 127.0.0.1 | バインドアドレス |
+
+### 画面構成
+
+#### サマリーカード
+- **Pending / Running / Completed / Failed** の合計件数をリアルタイム表示
+- 2秒ごとに自動更新（タブ非表示時は間引き、エラー時は指数バックオフ）
+
+#### カテゴリ別状態
+- t2i / i2i / t2v / i2v の各カテゴリの状態をカード表示
+- **Inflight**: 現在の同時実行数 / 上限
+- **Cooldown**: 429受信後の残りcooldown秒数
+- **Consecutive 429**: 連続429回数（情報表示のみ）
+- **Pause / Resume ボタン**: カテゴリの手動一時停止・再開
+
+#### 登録済みスキル一覧
+- `.claude/skills/` と `.agents/skills/` のスキルを自動走査
+- カテゴリ別カラーバッジ（t2i=青、i2i=緑、t2v=紫、i2v=橙 等）
+- エンドポイントURL表示
+- **↻ Refreshボタン**で再走査
+
+#### エンドポイント統計テーブル
+- エンドポイントごとの Pending / Running / Completed / Failed 件数
+
+#### 最近のジョブ一覧
+- ステータス別フィルター（All / Pending / Running / Polling / Completed / Failed）
+- 表示件数の変更（1〜500件、デフォルト50件）
+- クリックで**ジョブ詳細モーダル**（送信引数・エラー内容・レスポンスをJSON表示）
+
+### 設定パネル（☰ ハンバーガーメニュー）
+
+ヘッダー左の ☰ ボタンから、キューシステムの設定をリアルタイムに変更できます。
+
+| 設定 | デフォルト | 説明 |
+|------|-----------|------|
+| **Max Inflight** | 1 | カテゴリあたりの同時submit数 |
+| **Min Interval (s)** | 1.0 | カテゴリ内submit間の最小待ち時間 |
+| **429 Cooldown (s)** | 3600 | 429受信後のcooldown秒数 |
+| **Max Concurrent** | 2 | エンドポイントあたりの同時ジョブ数 |
+| **EP Min Interval (s)** | 10.0 | エンドポイント内のdispatch間隔 |
+| **Idle Timeout (s)** | 60 | ワーカー自動停止までの秒数 |
+
+- **Apply**: 変更を即座にワーカーに反映（再起動不要）
+- **Reload Current**: ワーカーから現在の設定値を再読み込み
+- 変更結果は Applied / Rejected / Requires Restart に分けて表示
+
+### ワーカー管理ボタン
+
+ヘッダー右側のボタンでワーカーデーモンの起動・停止・再起動を制御できます。
+
+| ボタン | 動作 |
+|--------|------|
+| **▶ Start** | ワーカーが停止中のとき表示。バックグラウンドで起動 |
+| **■ Stop** | ワーカーが稼働中のとき表示。graceful停止（進行中ジョブ完了待ち） |
+| **↻ Restart** | ワーカーが稼働中のとき表示。停止→起動を一括実行 |
+
+### セキュリティ
+
+- デフォルトで `127.0.0.1` のみにバインド（外部アクセス不可）
+- ワーカーAPIへのプロキシはホワイトリスト方式（許可パスのみ通過）
+- リクエストボディ上限 1 MiB、プロキシタイムアウト 10秒
+- XSS対策: DOM APIによる安全なテキスト挿入（innerHTML不使用）
+
+### タスクトレイ（将来対応予定）
+
+OSのシステムトレイにアイコンを常駐させ、右クリックメニューからダッシュボードの起動やワーカーの管理を行う機能を計画中です。外部依存（pystray + Pillow）が必要なため、本体とは別パッケージとして提供予定です。
+
+現時点では、ダッシュボードのStart/Stop/Restartボタンで同等の操作が可能です。
+
+### アーキテクチャ
+
+```
+ブラウザ ←→ Dashboard (port 54322) ←→ Worker (port 54321) ←→ MCP Server
+              │                          │
+              ├─ 静的ファイル配信          ├─ ジョブ管理（SQLite）
+              ├─ /api/* プロキシ           ├─ カテゴリ制御
+              ├─ /api/skills（走査）       ├─ SessionManager
+              └─ ワーカー起動/停止         └─ inflight/cooldown
+```
 
 ## 更新履歴
 
