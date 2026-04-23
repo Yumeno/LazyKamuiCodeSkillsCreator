@@ -140,10 +140,12 @@ class _RequestHandler(BaseHTTPRequestHandler):
         if self.path == "/api/stats":
             stats = app.store.get_stats_by_endpoint()
             cat_status = app.dispatcher.category_limiter.get_all_status()
+            ep_pauses = app.dispatcher.get_all_endpoint_pauses()
             self._send_json(200, {
                 "server_time_utc": _utc_now_iso(),
                 "endpoints": stats,
                 "category_limits": cat_status,
+                "endpoint_pauses": ep_pauses,
             })
             return
 
@@ -223,6 +225,24 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
         # Touch last access time
         app.touch()
+
+        # Endpoint resume
+        if self.path == "/api/endpoints/resume":
+            try:
+                body = json.loads(self._read_body())
+            except (json.JSONDecodeError, ValueError):
+                self._send_json(400, {"error": "Invalid JSON"})
+                return
+            endpoint = body.get("endpoint", "")
+            if not endpoint:
+                self._send_json(400, {"error": "Missing 'endpoint' field"})
+                return
+            app.dispatcher.resume_endpoint(endpoint)
+            self._send_json(200, {
+                "endpoint": endpoint,
+                "paused": False,
+            })
+            return
 
         # Category pause/resume
         if self.path.startswith("/api/categories/"):

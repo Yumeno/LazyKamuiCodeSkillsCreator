@@ -227,7 +227,8 @@ def create_mcp_job_executor(results_dir=None, session_manager=None):
             max_polls = DEFAULT_MAX_POLLS
             poll_interval = 2.0
 
-            for _ in range(max_polls):
+            heartbeat_interval = 150  # polls (~5 min at 2s interval)
+            for poll_count in range(max_polls):
                 try:
                     status_resp = client.check_status(status_tool, request_id)
                     status, status_result = parse_status_response(status_resp)
@@ -244,6 +245,11 @@ def create_mcp_job_executor(results_dir=None, session_manager=None):
                         error=_json.dumps(status_result, ensure_ascii=False),
                     )
                     return
+
+                # Heartbeat: update updated_at so stale-polling detector
+                # knows this thread is still alive
+                if poll_count > 0 and poll_count % heartbeat_interval == 0:
+                    store.update_status(job_id, "polling")
 
                 time.sleep(poll_interval)
             else:

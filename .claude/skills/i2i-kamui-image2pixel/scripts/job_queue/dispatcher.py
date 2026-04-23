@@ -50,6 +50,9 @@ class QueueConfig:
             )
 
         cfg.category_rate_limits = d.get("category_rate_limits", {})
+        cfg.stale_polling_timeout = float(
+            d.get("stale_polling_timeout_seconds", 1800.0)
+        )
         return cfg
 
     @classmethod
@@ -92,6 +95,8 @@ class Dispatcher:
         )
         self._last_run_time: dict[str, float] = {}
         self._pause_until: dict[str, float] = {}
+        self._endpoint_paused: set[str] = set()
+        self._endpoint_pause_reason: dict[str, dict] = {}
         self._pool = ThreadPoolExecutor(max_workers=max_workers)
         self._running = False
         self._thread: threading.Thread | None = None
@@ -99,6 +104,24 @@ class Dispatcher:
     def pause_endpoint(self, endpoint: str, seconds: float):
         """Suspend new dispatches to an endpoint for *seconds* seconds."""
         self._pause_until[endpoint] = time.monotonic() + seconds
+
+    def resume_endpoint(self, endpoint: str):
+        """Remove endpoint pause (for non-429 error recovery)."""
+        self._endpoint_paused.discard(endpoint)
+        self._endpoint_pause_reason.pop(endpoint, None)
+        logger.info("[Dispatcher] Endpoint resumed: %s", endpoint)
+
+    def is_endpoint_paused(self, endpoint: str) -> bool:
+        """Return True if *endpoint* is paused due to a non-429 error."""
+        return endpoint in self._endpoint_paused
+
+    def get_endpoint_pause_reason(self, endpoint: str) -> dict | None:
+        """Return pause reason for an endpoint, or None."""
+        return self._endpoint_pause_reason.get(endpoint)
+
+    def get_all_endpoint_pauses(self) -> dict:
+        """Return all endpoint pause states."""
+        return dict(self._endpoint_pause_reason)
 
     def register_endpoint_limits(
         self, endpoint: str, max_concurrent: int, min_interval: float
@@ -129,9 +152,13 @@ class Dispatcher:
             if category is not None and category in dispatched_categories:
                 continue
 
+            # Check endpoint pause (non-429 error pause)
+            if ep in self._endpoint_paused:
+                continue
+
             max_concurrent, min_interval = self.config.get_limits(ep)
 
-            # Check pause
+            # Check temporary pause (cooldown)
             if time.monotonic() < self._pause_until.get(ep, 0.0):
                 continue
 
@@ -181,9 +208,13 @@ class Dispatcher:
             if category is not None and self.category_limiter.is_paused(category):
                 continue
 
+            # Check endpoint pause
+            if ep in self._endpoint_paused:
+                continue
+
             max_concurrent, min_interval = self.config.get_limits(ep)
 
-            # Check pause
+            # Check temporary pause (cooldown)
             if time.monotonic() < self._pause_until.get(ep, 0.0):
                 continue
 
@@ -207,6 +238,18 @@ class Dispatcher:
             self._last_run_time[ep] = time.monotonic()
             self._pool.submit(self._run_job, job)
             dispatched += 1
+
+        # --- Phase 3: stale polling detection ---
+        stale_timeout = getattr(self.config, "stale_polling_timeout", 1800.0)
+        if stale_timeout > 0:
+            stale_jobs = self.store.get_stale_polling(stale_timeout)
+            for job in stale_jobs:
+                self.store.update_status(job["id"], "recovering")
+                logger.warning(
+                    "[Dispatcher] Stale polling detected: job %s → recovering "
+                    "(no heartbeat for %ds)",
+                    job["id"][:8], int(stale_timeout),
+                )
 
         return dispatched
 
@@ -268,20 +311,24 @@ class Dispatcher:
                     ),
                 )
             else:
-                # Non-429 errors consume quota → failed + pause category
+                # Non-429 errors consume quota → failed + pause endpoint
                 error_detail = self._extract_error_detail(e)
                 self.store.update_status(
                     job["id"], "failed", error=error_detail
                 )
-                if category:
-                    self.category_limiter.pause_with_reason(
-                        category,
-                        reason="submit_error",
-                        status_code=status_code,
-                        error_detail=error_detail,
-                        job_id=job["id"],
-                        endpoint=job["endpoint"],
-                    )
+                endpoint = job["endpoint"]
+                self._endpoint_paused.add(endpoint)
+                self._endpoint_pause_reason[endpoint] = {
+                    "reason": "submit_error",
+                    "status_code": status_code,
+                    "error_detail": error_detail[:2000],
+                    "job_id": job["id"],
+                    "paused_at": time.monotonic(),
+                }
+                logger.warning(
+                    "[Dispatcher] Endpoint paused: %s (HTTP %s)",
+                    endpoint, status_code,
+                )
         finally:
             if acquired:
                 self.category_limiter.release_inflight(
