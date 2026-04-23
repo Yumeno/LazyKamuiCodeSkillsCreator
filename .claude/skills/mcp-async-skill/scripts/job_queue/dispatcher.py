@@ -303,6 +303,11 @@ class Dispatcher:
                 if category:
                     self.category_limiter.force_cooldown(category)
                     self.category_limiter.record_429(category)
+                # Always set endpoint-level cooldown (covers unknown categories)
+                self.pause_endpoint(
+                    job["endpoint"],
+                    self.category_limiter._exhaust_cooldown,
+                )
                 self.store.update_status(
                     job["id"], "pending",
                     error=(
