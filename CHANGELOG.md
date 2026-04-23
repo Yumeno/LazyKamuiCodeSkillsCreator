@@ -1,5 +1,19 @@
 # Changelog
 
+## [lazy-v2.10.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.10.0) (2026-04-23)
+
+### Fixed
+- **Stale polling検出** (#55): pollingスレッドが死んでもジョブが永久放置される問題を修正
+  - dispatch_once()にPhase 3追加: status=pollingかつupdated_atが30分以上前のジョブをrecoveringに自動降格
+  - _poll_and_get_result()にheartbeat追加: 5分ごとにupdated_atを更新してstale誤判定を防止
+  - stale_polling_timeout_secondsをqueue_config.jsonで設定可能（デフォルト1800秒=30分）
+- **Pause粒度の細分化** (#56): 非429エラー時のpauseをカテゴリ全体→エンドポイント単位に変更
+  - 1エンドポイントのバリデーションエラーで同カテゴリ全体が停止する問題を解消
+  - dispatcherに`_endpoint_paused`/`_endpoint_pause_reason`を追加
+  - `POST /api/endpoints/resume`でエンドポイント個別のresume
+  - `/api/stats`にendpoint_pausesを追加
+  - カテゴリpauseは手動操作用に残存
+
 ## [lazy-v2.9.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.9.0) (2026-04-21)
 
 ### Added

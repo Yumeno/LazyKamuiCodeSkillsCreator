@@ -57,6 +57,7 @@ ALLOWED_GET = [
 ]
 ALLOWED_POST = [
     re.compile(r"^/api/categories/(t2i|i2i|t2v|i2v|r2i|r2v)/(pause|resume)$"),
+    re.compile(r"^/api/endpoints/resume$"),
     re.compile(r"^/api/worker/shutdown$"),
 ]
 ALLOWED_PATCH = [

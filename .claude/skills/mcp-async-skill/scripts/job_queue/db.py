@@ -223,6 +223,32 @@ class JobStore:
                 for row in cur.fetchall()
             ]
 
+    def get_stale_polling(self, timeout_seconds: float = 1800.0) -> list[dict]:
+        """Return jobs stuck in 'polling' state beyond the timeout.
+
+        These jobs likely have a dead polling thread and should be
+        transitioned to 'recovering' for retry.
+
+        Args:
+            timeout_seconds: How long a job can be in polling state
+                without an ``updated_at`` refresh before being considered stale.
+                Default 30 minutes.
+
+        Returns:
+            List of job dicts ordered by updated_at ascending (oldest first).
+        """
+        with self._lock:
+            cur = self.conn.execute(
+                """
+                SELECT * FROM jobs
+                WHERE status = 'polling'
+                  AND (julianday('now') - julianday(REPLACE(updated_at, 'Z', ''))) * 86400.0 >= ?
+                ORDER BY updated_at ASC
+                """,
+                (timeout_seconds,),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
     def get_stale_jobs(self, statuses: list[str]) -> list[dict]:
         """Return all jobs with the given statuses (for zombie recovery on startup).
 
