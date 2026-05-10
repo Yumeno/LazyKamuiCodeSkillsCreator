@@ -47,6 +47,51 @@ class TestGenerateQueueConfig(unittest.TestCase):
         self.assertIsInstance(cfg["port"], int)
         self.assertGreater(cfg["idle_timeout_seconds"], 0)
 
+    def test_seedance_default_groups_present(self):
+        """PR4 (#60): the generated queue_config ships with the
+        Bytedance Seedance v2.0 video custom_groups out of the box.
+
+        These groups are pinned because the upstream URL prefixes
+        (`t2v_sd2`, `i2v_sd2`, `r2v_sd2`) are not in the standard
+        category list — without these groups, the dispatcher would
+        treat these high-cost endpoints as "unknown" and skip
+        rate-limit accounting entirely. Removing or renaming them
+        in `generate_queue_config()` is a behaviour change that
+        should fail this test."""
+        cfg = generate_skill.generate_queue_config("http://x:8000")
+        self.assertIn("custom_groups", cfg)
+        groups = cfg["custom_groups"]
+        self.assertEqual(set(groups.keys()), {"t2v_sd2", "i2v_sd2", "r2v_sd2"})
+
+    def test_seedance_default_groups_have_expected_endpoints(self):
+        cfg = generate_skill.generate_queue_config("http://x:8000")
+        groups = cfg["custom_groups"]
+        # Each variant pair (base + fast / reference + fast-reference)
+        self.assertEqual(groups["t2v_sd2"]["endpoints"], [
+            "https://kamui-code.ai/t2v_sd2/fal/bytedance/seedance-v2.0",
+            "https://kamui-code.ai/t2v_sd2/fal/bytedance/seedance-v2.0-fast",
+        ])
+        self.assertEqual(groups["i2v_sd2"]["endpoints"], [
+            "https://kamui-code.ai/i2v_sd2/fal/bytedance/seedance-v2.0",
+            "https://kamui-code.ai/i2v_sd2/fal/bytedance/seedance-v2.0-fast",
+        ])
+        self.assertEqual(groups["r2v_sd2"]["endpoints"], [
+            "https://kamui-code.ai/r2v_sd2/fal/bytedance/seedance-v2.0-reference",
+            "https://kamui-code.ai/r2v_sd2/fal/bytedance/seedance-v2.0-fast-reference",
+        ])
+
+    def test_seedance_default_groups_use_conservative_limits(self):
+        """All three groups use the same conservative defaults
+        (max_inflight=1, min_interval=10s, exhaust_cooldown=3600s).
+        Users can tune them up in queue_config.json once they have
+        observed real-world headroom."""
+        cfg = generate_skill.generate_queue_config("http://x:8000")
+        for name in ("t2v_sd2", "i2v_sd2", "r2v_sd2"):
+            g = cfg["custom_groups"][name]
+            self.assertEqual(g["max_inflight"], 1, msg=name)
+            self.assertEqual(g["min_interval"], 10, msg=name)
+            self.assertEqual(g["exhaust_cooldown"], 3600, msg=name)
+
 
 # ── 6-2. File Copy Tests ────────────────────────────────────────────────
 
