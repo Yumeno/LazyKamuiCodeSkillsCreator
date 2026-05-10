@@ -29,10 +29,49 @@ class JobStore:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
         self._lock = threading.Lock()
-        self._init_schema()
+        try:
+            self._init_schema_and_migrations()
+        except Exception:
+            # Migration failure leaves the file with a half-applied
+            # state from the worker's perspective. Close the
+            # connection so the OS releases the file handle (Windows
+            # in particular won't let the user move the broken DB
+            # aside otherwise) and re-raise so the caller sees the
+            # actual reason.
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            raise
 
-    def _init_schema(self):
+    def _init_schema_and_migrations(self):
+        """Bootstrap the DB.
+
+        Order matters and is the contract that
+        :func:`job_queue.migrations.migrate_001_initial` relies on
+        (PHASE1_PLAN_v3 fix #6):
+
+        1. ``CREATE TABLE IF NOT EXISTS jobs (...)`` — guarantees the
+           table exists for both fresh DBs and pre-PR3 DBs that were
+           created without the migration framework.
+        2. :func:`apply_migrations` — bumps ``PRAGMA user_version``
+           to the current target after every successful migration.
+           Migration 001 only verifies that the table has the
+           required column NAMES; it does not validate types or
+           constraints.
+
+        Splitting these two steps would let migration 001 run against
+        an empty DB and falsely report "schema drift", which is why
+        this method does both inline and in this order.
+        """
+        # Imported lazily to avoid a circular import: migrations.py logs
+        # via ``logging.getLogger("job_queue.migrations")`` and does not
+        # depend on db.py, so keeping the import at function scope keeps
+        # ``job_queue/__init__.py`` free of unrelated symbols.
+        from .migrations import apply_migrations
+
         with self._lock:
+            # Step 1: base schema (idempotent, runs every startup)
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY,
@@ -52,6 +91,9 @@ class JobStore:
                 )
             """)
             self.conn.commit()
+
+            # Step 2: migration framework
+            apply_migrations(self.conn)
 
     def insert_job(
         self,
