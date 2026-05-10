@@ -4,6 +4,9 @@
 # Queue runtime data (SQLite DB, results)
 .claude/queue/
 
+# Claude Code worktrees (local working branches and notes)
+.claude/worktrees/
+
 # Old directory
 old/
 
