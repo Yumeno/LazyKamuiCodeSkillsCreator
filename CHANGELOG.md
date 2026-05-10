@@ -42,6 +42,15 @@
   - **Bytedance Seedance v2.0 動画モデル群 (`t2v_sd2` / `i2v_sd2` / `r2v_sd2`) を初期同梱** (`generate_skill.py` テンプレート + `queue_config.example.json`)。URL prefix が標準カテゴリ list 外のため、未設定だと rate-limit accounting がスキップされる問題への安全策
   - 詳細: [docs/custom-groups.md](docs/custom-groups.md)
 - 新規テスト: `test_custom_group_limiter.py` (38 tests), `test_dispatcher_groups.py` (12 tests), `test_worker_groups.py` (16 tests), `test_generate_skill_queue.py` の Seedance pin (3 tests) — 構築 / glob / concurrent smoke / unknown handling / dispatcher routing isolation / HTTP API / template defaults をカバー
+- **Queue Dashboard: per-category UI + Custom Groups + graceful degrade + `--port 0`** (#61, #53):
+  - **Categories と Custom Groups の二段組レイアウト**: 左に t2i/i2i/t2v/i2v、右にユーザー定義グループ。900px 以下では縦積みに自動切替。グループカードは indigo 左ボーダーで識別性向上、マッチする endpoint パターンをカード内に inline 表示
+  - **Per-category Settings グリッド**: t2i/i2i/t2v/i2v 各行に `max_inflight` / `min_interval` / `429 cooldown` の入力欄。空欄 skip ロジックで「変えたいフィールドだけ送信」(`0` は有効値として通過)
+  - **Per-group Settings グリッド**: 各カスタムグループに 1 行ずつ。Group 名 tooltip でマッチ endpoint パターン確認
+  - **Worker version 表示** (PR2 連携): ヘッダーに `/api/version` 経由でバージョン表示。古い worker なら `(pre-v2.11.0)`
+  - **Compatibility banner (graceful degrade)** (PHASE1_PLAN_v3 fix #2): `cfg.category.limits` 不在を検出して Settings パネルに warning + 復旧手順 (`curl -X POST .../api/worker/shutdown`) 表示。jobs list / stats は引き続き動作
+  - **新 API endpoints の whitelist 追加**: `/api/version`, `/api/groups`, `POST /api/groups/{name}/{pause|resume}` (`{name}` は `[A-Za-z0-9_\-.]+` を許容)
+  - **`--port 0` 動的ポート割当** (#53): `--port 0` で OS が空きポートを選択、stdout に `PORT=NNNNN` 形式で実ポート出力。subprocess driver で grep parse 可能。54322 が他サービスと衝突する long-standing pain point の解消
+- 新規テスト: `test_dashboard_smoke.py` (7 tests) — `--port 0` の subprocess + `PORT=NNNNN` parse + 実 HTTP 疎通、proxy whitelist (`/api/version` / `/api/groups` / `POST /api/groups/{name}/{action}` / dotted group name / unauthorized POST blocked) をカバー。Windows 環境対応で `PYTHONIOENCODING=utf-8` を Popen に強制
 
 ### Changed (BREAKING)
 - **`set_max_inflight(cat, value)` の `cat` 引数必須化**: lazy-v2.10.x の単一引数 `set_max_inflight(value)` (全カテゴリ一括変更) は削除。`set_min_interval` / `set_exhaust_cooldown` も同様。worker の `PATCH /api/config` ハンドラが「全カテゴリ一括」の API レイヤを emulate する。
@@ -67,6 +76,8 @@
 - **lazy-v2.10.x worker と lazy-v2.11.0 client の組み合わせ**: 新クライアントは旧 worker から `X-Worker-Version` が返らないことを検知し、stderr に「pre-v2.11.0 worker の可能性、shutdown して再起動を」と 1 回警告します。処理は止めません (skew 中でも動く API パスがあるため)。**新版を上書きインストールする前に `curl -X POST http://127.0.0.1:54321/api/worker/shutdown` で古い worker を停止することを推奨** (詳細: [docs/version-handshake.md](docs/version-handshake.md))。
 - **`custom_groups` キーが無い既存 `queue_config.json`**: 完全互換。`custom_groups` は空 dict 扱いとなり、すべての endpoint がカテゴリ経由でルーティングされます (lazy-v2.10.x と同じ挙動)。新規インストールでは Seedance v2.0 動画モデル群 (`t2v_sd2` / `i2v_sd2` / `r2v_sd2`) が初期同梱されます — 既存ユーザーが Seedance v2.0 モデルを使う場合は `queue_config.json` に手動で追加するか、新規スキル生成 (`generate_skill.py`) を流すと反映されます。
 - **lazy-v2.10.x dashboard との組み合わせ**: dashboard は `custom_groups` セクションを表示しませんが、worker の HTTP API は引き続き動作します。`/api/config` の `custom_groups` フィールドは旧 dashboard には無視されるため、`category_rate_limits` の旧互換ミラーキーと同じく "ignore unknown fields" 戦略で安全に共存します。
+- **lazy-v2.11.0 dashboard と pre-v2.11 worker の組み合わせ**: 新 dashboard は `cfg.category.limits` 不在 + `/api/version` 404 を検出すると Settings パネルに **graceful degrade banner** を表示し、復旧手順 (`curl -X POST .../api/worker/shutdown`) を案内します。jobs list / stats / endpoint table は引き続き機能するので「ダッシュボードが完全に死ぬ」状態にはなりません。
+- **`--port 0` で実ポートを別プロセスから知りたい場合**: stdout の最初の出力が `PORT=NNNNN` 形式 (machine-parseable) になっています。`grep -oP 'PORT=\K\d+'` (bash) や `Select-String` (PowerShell) で取得できます。
 
 ## [lazy-v2.10.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.10.0) (2026-04-23)
 
