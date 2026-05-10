@@ -25,5 +25,16 @@
       "t2v": {"max_inflight": 1, "min_interval": 1.0, "exhaust_cooldown": 1800},
       "i2v": {"max_inflight": 1, "min_interval": 1.0, "exhaust_cooldown": 3600}
     }
+  },
+  "custom_groups": {
+    "premium-video": {
+      "endpoints": [
+        "https://kamui-code.ai/t2v/fal/veo3*",
+        "https://kamui-code.ai/i2v/fal/veo3*"
+      ],
+      "max_inflight": 1,
+      "min_interval": 30,
+      "exhaust_cooldown": 7200
+    }
   }
 }
