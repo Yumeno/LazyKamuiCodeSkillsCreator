@@ -1018,11 +1018,45 @@ def generate_queue_config(endpoint: str) -> dict:
             },
         },
         # PR4 (#60): user-defined endpoint groups with their own
-        # rate limits. Empty by default; populate to throttle a
-        # subset of endpoints (e.g. high-cost models) more strictly
-        # than their parent category. See docs/custom-groups.md for
-        # the schema and examples.
-        "custom_groups": {},
+        # rate limits. The defaults below cover Bytedance Seedance
+        # v2.0 video models, which the upstream MCP service throttles
+        # separately from their parent t2v / i2v / r2v categories.
+        # The URL prefixes (`t2v_sd2`, `i2v_sd2`, `r2v_sd2`) are
+        # service-specific and intentionally not in the standard
+        # category list, so without these groups the dispatcher would
+        # treat the endpoints as "unknown" and skip rate-limit
+        # accounting entirely.
+        # See docs/custom-groups.md for the schema and how to add
+        # / remove / tune groups.
+        "custom_groups": {
+            "t2v_sd2": {
+                "endpoints": [
+                    "https://kamui-code.ai/t2v_sd2/fal/bytedance/seedance-v2.0",
+                    "https://kamui-code.ai/t2v_sd2/fal/bytedance/seedance-v2.0-fast",
+                ],
+                "max_inflight": 1,
+                "min_interval": 10,
+                "exhaust_cooldown": 3600,
+            },
+            "i2v_sd2": {
+                "endpoints": [
+                    "https://kamui-code.ai/i2v_sd2/fal/bytedance/seedance-v2.0",
+                    "https://kamui-code.ai/i2v_sd2/fal/bytedance/seedance-v2.0-fast",
+                ],
+                "max_inflight": 1,
+                "min_interval": 10,
+                "exhaust_cooldown": 3600,
+            },
+            "r2v_sd2": {
+                "endpoints": [
+                    "https://kamui-code.ai/r2v_sd2/fal/bytedance/seedance-v2.0-reference",
+                    "https://kamui-code.ai/r2v_sd2/fal/bytedance/seedance-v2.0-fast-reference",
+                ],
+                "max_inflight": 1,
+                "min_interval": 10,
+                "exhaust_cooldown": 3600,
+            },
+        },
     }
 
 

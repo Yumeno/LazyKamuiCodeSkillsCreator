@@ -27,14 +27,32 @@
     }
   },
   "custom_groups": {
-    "premium-video": {
+    "t2v_sd2": {
       "endpoints": [
-        "https://kamui-code.ai/t2v/fal/veo3*",
-        "https://kamui-code.ai/i2v/fal/veo3*"
+        "https://kamui-code.ai/t2v_sd2/fal/bytedance/seedance-v2.0",
+        "https://kamui-code.ai/t2v_sd2/fal/bytedance/seedance-v2.0-fast"
       ],
       "max_inflight": 1,
-      "min_interval": 30,
-      "exhaust_cooldown": 7200
+      "min_interval": 10,
+      "exhaust_cooldown": 3600
+    },
+    "i2v_sd2": {
+      "endpoints": [
+        "https://kamui-code.ai/i2v_sd2/fal/bytedance/seedance-v2.0",
+        "https://kamui-code.ai/i2v_sd2/fal/bytedance/seedance-v2.0-fast"
+      ],
+      "max_inflight": 1,
+      "min_interval": 10,
+      "exhaust_cooldown": 3600
+    },
+    "r2v_sd2": {
+      "endpoints": [
+        "https://kamui-code.ai/r2v_sd2/fal/bytedance/seedance-v2.0-reference",
+        "https://kamui-code.ai/r2v_sd2/fal/bytedance/seedance-v2.0-fast-reference"
+      ],
+      "max_inflight": 1,
+      "min_interval": 10,
+      "exhaust_cooldown": 3600
     }
   }
 }
