@@ -11,6 +11,16 @@
   - `category_limiter.py` の public API 拡張: `is_known_category()`, `get_categories()`, `get_max_inflight(cat)`, `get_min_interval(cat)`, `get_exhaust_cooldown(cat)`
   - 詳細: [docs/category-limits.md](docs/category-limits.md)
 - 新規テスト: `test_category_limiter.py` (37 tests), `test_worker_config.py` (18 tests), 並行性 / 後方互換 / 入力検証 / unknown endpoint dispatch / legacy timestamp parse をカバー
+- **Worker version handshake** (#62): 上書きインストールで古い worker daemon が残った場合の skew を検知して stderr に 1 回警告
+  - 全 JSON レスポンス (200 / 4xx / 5xx すべて) に `X-Worker-Version` ヘッダー付与
+  - 新規エンドポイント `GET /api/version` (`version` / `api_compatible_versions` / `server_time_utc`)
+  - 新規モジュール `job_queue/versioning.py` に共通ヘルパー (`get_worker_version`, `warn_if_version_mismatch`, `reset_warned_for_tests`)。`mcp_async_call.py` と `job_queue/client.py` 両方が同じヘルパーを呼ぶ
+  - クライアント側 check は worker への全 HTTP 呼び出しに統合: `_queue_wait` / `_queue_list` / `_queue_stats` / `--pause-category` / `--resume-category` / `submit_job` / `wait_job` / `is_worker_running`
+  - 警告は **process-local one-shot guard** で 1 プロセスにつき 1 回だけ stderr に出る
+  - `api_compatible_versions` は **Phase 1 では informational** (フィールドだけ予約、警告抑制はしない。将来の silent-set 拡張用)
+  - `.github/workflows/release.yml` 強化: `__version__` stamp に pre/post `grep -q` 検証を追加。失敗を CI で止め、tarball が `0+dev` で出荷されて全クライアントが自己 mismatch 警告する事故を防止。同じ workflow が main にも書き戻すので git clone 派の利用者にも同じ version が見える
+  - 詳細: [docs/version-handshake.md](docs/version-handshake.md)
+- 新規テスト: `test_versioning.py` (13 tests), `test_worker_version.py` (11 tests), one-shot guard / 4xx / 5xx ヘッダー / `/api/version` レスポンス形状 / constant wiring / health-probe 統合をカバー
 
 ### Changed (BREAKING)
 - **`set_max_inflight(cat, value)` の `cat` 引数必須化**: lazy-v2.10.x の単一引数 `set_max_inflight(value)` (全カテゴリ一括変更) は削除。`set_min_interval` / `set_exhaust_cooldown` も同様。worker の `PATCH /api/config` ハンドラが「全カテゴリ一括」の API レイヤを emulate する。
@@ -33,6 +43,7 @@
 ### Compatibility
 - **lazy-v2.10.x の queue_config.json (旧 flat schema) は引き続き動作**します (起動時に `[CategoryLimiter] (instance ...) DEPRECATED: ...` 警告ログが 1 回出力)
 - **lazy-v2.10.x dashboard は引き続き動作**します (`GET /api/config` の旧互換ミラーキーで UI 値が空にならない)。ただし旧 dashboard から値編集すると **新 worker は全カテゴリに一括適用** します。per-category 編集には `lazy-v2.12.0` 以降の dashboard が必要。
+- **lazy-v2.10.x worker と lazy-v2.11.0 client の組み合わせ**: 新クライアントは旧 worker から `X-Worker-Version` が返らないことを検知し、stderr に「pre-v2.11.0 worker の可能性、shutdown して再起動を」と 1 回警告します。処理は止めません (skew 中でも動く API パスがあるため)。**新版を上書きインストールする前に `curl -X POST http://127.0.0.1:54321/api/worker/shutdown` で古い worker を停止することを推奨** (詳細: [docs/version-handshake.md](docs/version-handshake.md))。
 
 ## [lazy-v2.10.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.10.0) (2026-04-23)
 

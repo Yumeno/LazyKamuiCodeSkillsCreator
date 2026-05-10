@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from job_queue import DEFAULT_MAX_POLLS
+from job_queue import DEFAULT_MAX_POLLS, __version__ as CLIENT_VERSION
+from job_queue.versioning import (
+    get_worker_version,
+    warn_if_version_mismatch,
+)
 
 # Force UTF-8 encoding for stdout/stderr/stdin (prevents UnicodeEncodeError on Windows)
 # Python 3.7+ required. errors='backslashreplace' ensures no crash on unencodable chars.
@@ -1022,6 +1026,21 @@ def _queue_wait_fallback(
         store.close()
 
 
+def _check_worker_version(response) -> None:
+    """Inspect a worker response for the X-Worker-Version header and warn
+    on mismatch. (PR2 / #62.)
+
+    Called from every helper that talks to the worker. The actual warning
+    happens at most once per process via the one-shot guard inside
+    ``versioning.warn_if_version_mismatch``.
+    """
+    if response is None:
+        return
+    headers = getattr(response, "headers", None)
+    worker_v = get_worker_version(headers)
+    warn_if_version_mismatch(worker_v, CLIENT_VERSION)
+
+
 def _queue_wait(
     worker_url: str,
     job_id: str,
@@ -1034,6 +1053,7 @@ def _queue_wait(
         if include_args:
             url += "?include_args=true"
         resp = requests.get(url, timeout=10)
+        _check_worker_version(resp)
         return resp.json()
     except (requests.ConnectionError, requests.Timeout):
         return _queue_wait_fallback(job_id, include_args, queue_config_path)
@@ -1056,6 +1076,7 @@ def _queue_list(
         if params:
             url += "?" + "&".join(f"{k}={v}" for k, v in params.items())
         resp = requests.get(url, timeout=10)
+        _check_worker_version(resp)
         resp.raise_for_status()
         return resp.json()
     except (requests.ConnectionError, requests.Timeout):
@@ -1069,6 +1090,7 @@ def _queue_stats(
     """Get per-endpoint statistics from the queue worker, with SQLite fallback."""
     try:
         resp = requests.get(f"{worker_url}/api/stats", timeout=10)
+        _check_worker_version(resp)
         resp.raise_for_status()
         return resp.json()
     except (requests.ConnectionError, requests.Timeout):
@@ -1305,6 +1327,7 @@ def main():
         worker_url = resolve_worker_url(args.worker_url, args.queue_config) or "http://127.0.0.1:54321"
         try:
             resp = requests.post(f"{worker_url}/api/categories/{args.pause_category}/pause", timeout=10)
+            _check_worker_version(resp)
             print(json.dumps(resp.json(), indent=2, ensure_ascii=False))
         except (requests.ConnectionError, requests.Timeout):
             print(json.dumps({"error": "Worker is not running"}, indent=2))
@@ -1314,6 +1337,7 @@ def main():
         worker_url = resolve_worker_url(args.worker_url, args.queue_config) or "http://127.0.0.1:54321"
         try:
             resp = requests.post(f"{worker_url}/api/categories/{args.resume_category}/resume", timeout=10)
+            _check_worker_version(resp)
             print(json.dumps(resp.json(), indent=2, ensure_ascii=False))
         except (requests.ConnectionError, requests.Timeout):
             print(json.dumps({"error": "Worker is not running"}, indent=2))

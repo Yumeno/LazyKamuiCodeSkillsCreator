@@ -25,6 +25,7 @@ Claude Code用のMCPスキルジェネレーター。非同期ジョブパター
 | **キュー堅牢化** | ゾンビジョブ回復・指数バックオフリトライ・429 Retry-After対応・ワーカー側ダウンロード | 自動 | [📖](docs/queue_system_hardening.md) |
 | **カテゴリ別制御** | t2i/i2i/t2v/i2vカテゴリ単位でのinflight制御・429自動リトライ・非429エラー時のカテゴリ即pause | 自動 | [📖](docs/category-limits.md) |
 | **per-category 個別レートリミット** | 各カテゴリに独立した max_inflight / min_interval / exhaust_cooldown を設定可能 (`limits.{cat}.{key}`)。サービス側のカテゴリ別レートリミットに合わせて調整 | `queue_config.json` | [📖](docs/category-limits.md) |
+| **Worker version handshake** | 上書きインストールで古い worker daemon が残った場合に stderr で 1 回警告。`X-Worker-Version` ヘッダー + `GET /api/version` | 自動 | [📖](docs/version-handshake.md) |
 | **セッション管理** | MCPセッションをendpoint単位でキャッシュ。認証サーバーへの負荷を削減 | 自動 | |
 | **カテゴリpause/resume** | カテゴリ単位での手動一時停止・再開。他端末との枠共有時に便利 | `--pause-category` | |
 | **Queue Dashboard** | ブラウザから見えるキュー可視化Web UI。サマリー/カテゴリ/ジョブ一覧/失敗詳細/pause-resume。追加依存なし（Python stdlib + Vanilla JS） | 独立スキル | |
@@ -139,6 +140,41 @@ python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
 python .claude/skills/mcp-async-skill/scripts/generate_skill.py \
   -m /path/to/your/.mcp.json --lazy
 ```
+
+### ⚠️ アップグレード時の注意 (`lazy-v2.11.0` 以降)
+
+新版を **上書きインストールする前に古い worker daemon を停止** してください。停止しないまま展開すると、古い worker プロセスが port 54321 を握ったまま新クライアントと通信し、新スキーマ（例: `category.limits.{cat}.{key}` PATCH）が silent に drop されます。
+
+`lazy-v2.11.0` 以降のクライアントは skew を検知すると stderr に **1 回だけ** 警告を出します：
+
+```
+[mcp-async-skill] WARNING: worker version lazy-v2.10.1 != client version lazy-v2.11.0. ...
+  Fix: curl -X POST http://127.0.0.1:54321/api/worker/shutdown
+  Then re-run the client; a fresh worker will spawn at the new version.
+```
+
+**推奨手順:**
+
+```bash
+# 1. 古い worker を graceful shutdown
+curl -X POST http://127.0.0.1:54321/api/worker/shutdown
+
+# 2. 新版を上書き展開 (上のセットアップコマンドと同じ)
+curl -fSL -o mcp-async-skill.tar.gz <release URL>
+tar xzf mcp-async-skill.tar.gz -C .claude/skills/
+rm mcp-async-skill.tar.gz
+
+# 3. 次の CLI 呼び出しで新 worker が自動起動
+```
+
+PowerShell:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:54321/api/worker/shutdown"
+# 以降は方法 A の PowerShell 手順と同じ
+```
+
+詳細・代替手段（idle timeout を待つ）は [📖 Worker version handshake](docs/version-handshake.md) を参照。
 
 ### 方法B: git clone（開発者向け）
 

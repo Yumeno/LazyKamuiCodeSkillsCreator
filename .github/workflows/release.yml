@@ -13,6 +13,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Stamp version into __init__.py
+        run: |
+          set -e
+          TAG="${{ github.ref_name }}"
+          # Strip the "lazy-v" prefix so the in-package __version__ matches
+          # what mcp_async_call.py / job_queue/client.py compare against.
+          VERSION="${TAG#lazy-v}"
+          INIT=".claude/skills/mcp-async-skill/scripts/job_queue/__init__.py"
+
+          # Pre-stamp validation: refuse to silently no-op if the line
+          # we expect to rewrite is missing. PR2 / PHASE1_PLAN_v3 fix M3.
+          if ! grep -q '^__version__ = ' "$INIT"; then
+            echo "ERROR: __version__ line not found in $INIT — cannot stamp." >&2
+            echo "       The release tarball would ship the source default" >&2
+            echo "       (e.g. \"0+dev\") and every client would warn about" >&2
+            echo "       version mismatch against itself." >&2
+            exit 1
+          fi
+
+          # Stamp.
+          sed -i -E "s/^__version__ = .*/__version__ = \"$VERSION\"/" "$INIT"
+
+          # Post-stamp verification: confirm the file now contains exactly
+          # the expected line. Catches sed regex failures, escape issues,
+          # and CRLF drift.
+          if ! grep -q "^__version__ = \"$VERSION\"\$" "$INIT"; then
+            echo "ERROR: stamp failed — expected '__version__ = \"$VERSION\"'" >&2
+            echo "Got:" >&2
+            grep '^__version__' "$INIT" >&2 || true
+            exit 1
+          fi
+
+          echo "OK: stamped $INIT"
+          grep '^__version__' "$INIT"
+
       - name: Build tar.gz
         run: |
           STAGING=$(mktemp -d)
@@ -78,15 +113,33 @@ jobs:
             --title "$TAG" \
             --notes-file release-notes.md
 
-      - name: Update version in docs
+      - name: Update version in docs and __init__.py on main
         run: |
           TAG="${{ github.ref_name }}"
+          VERSION="${TAG#lazy-v}"
+          INIT=".claude/skills/mcp-async-skill/scripts/job_queue/__init__.py"
+
           git fetch origin main
           git checkout main
+
+          # Update download URLs in user-facing docs.
           sed -i -E "s|releases/download/lazy-v[0-9.]+/|releases/download/${TAG}/|g" README.md docs/release-process.md
+
+          # Persist the stamped __version__ on main as well, so anyone
+          # cloning from main (rather than installing the tarball) gets
+          # the same version string and avoids the "0+dev vs 2.x.y"
+          # warning. Same pre/post validation as the build step.
+          if grep -q '^__version__ = ' "$INIT"; then
+            sed -i -E "s/^__version__ = .*/__version__ = \"$VERSION\"/" "$INIT"
+            if ! grep -q "^__version__ = \"$VERSION\"\$" "$INIT"; then
+              echo "ERROR: failed to stamp __version__ on main." >&2
+              exit 1
+            fi
+          fi
+
           git diff --quiet && exit 0
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add README.md docs/release-process.md
+          git add README.md docs/release-process.md "$INIT"
           git commit -m "docs: update download URLs to ${TAG}"
           git push
