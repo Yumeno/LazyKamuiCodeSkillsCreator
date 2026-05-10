@@ -983,10 +983,11 @@ def detect_id_param_name(tools: list[dict]) -> str:
 def generate_queue_config(endpoint: str) -> dict:
     """Generate a default queue_config.json for the given endpoint.
 
-    Uses the lazy-v2.11.0 per-category schema: each of t2i/i2i/t2v/i2v has
-    its own ``max_inflight``, ``min_interval``, and ``exhaust_cooldown``.
+    Uses the lazy-v2.11.0+ per-category schema: each of t2i/i2i/t2v/i2v/r2v
+    has its own ``max_inflight``, ``min_interval``, and ``exhaust_cooldown``.
     Adjust these per category to match the upstream service's per-category
-    rate limits.
+    rate limits. ``r2v`` is tracked independently because the upstream MCP
+    service applies r2v rate limits separately from i2v (lazy-v2.11.1+).
     """
     per_cat_default = {
         "max_inflight": 1,
@@ -1008,13 +1009,14 @@ def generate_queue_config(endpoint: str) -> dict:
             }
         },
         "category_rate_limits": {
-            "categories": ["t2i", "i2i", "t2v", "i2v"],
-            "aliases": {"r2i": "i2i", "r2v": "i2v"},
+            "categories": ["t2i", "i2i", "t2v", "i2v", "r2v"],
+            "aliases": {"r2i": "i2i"},
             "limits": {
                 "t2i": dict(per_cat_default),
                 "i2i": dict(per_cat_default),
                 "t2v": dict(per_cat_default),
                 "i2v": dict(per_cat_default),
+                "r2v": dict(per_cat_default),
             },
         },
         # PR4 (#60): user-defined endpoint groups with their own

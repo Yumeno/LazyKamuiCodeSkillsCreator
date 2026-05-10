@@ -1,6 +1,6 @@
 # Custom Groups (Endpoint-Pattern Rate Limiting)
 
-`lazy-v2.11.0` 以降、`category_rate_limits` (`t2i` / `i2i` / `t2v` / `i2v` カテゴリ単位の制御) に加えて、**ユーザーが endpoint パターンで定義する独自グループ** に対しても per-group の同時実行数 / インターバル / 429 cooldown を設定できます。
+`lazy-v2.11.0` 以降、`category_rate_limits` (`t2i` / `i2i` / `t2v` / `i2v` / `r2v` カテゴリ単位の制御) に加えて、**ユーザーが endpoint パターンで定義する独自グループ** に対しても per-group の同時実行数 / インターバル / 429 cooldown を設定できます。
 
 ## なぜ必要か
 
@@ -118,7 +118,7 @@ endpoint = https://kamui-code.ai/t2v_sd2/fal/bytedance/seedance-v2.0
 | `i2v_sd2` | `seedance-v2.0` / `seedance-v2.0-fast` | 1 | 10s | 3600s |
 | `r2v_sd2` | `seedance-v2.0-reference` / `seedance-v2.0-fast-reference` | 1 | 10s | 3600s |
 
-なぜ初期同梱かというと、**URL prefix `t2v_sd2` / `i2v_sd2` / `r2v_sd2` が標準カテゴリリスト (`t2i / i2i / t2v / i2v`) に含まれない** ため、`custom_groups` 設定なしでは「未知 endpoint」扱いとなり、dispatcher が rate-limit accounting を一切スキップしてしまうからです。高コストモデルがレートリミットなしで野放しになるのは安全とは言えないため、保守的なデフォルトを最初から入れています。
+なぜ初期同梱かというと、**URL prefix `t2v_sd2` / `i2v_sd2` / `r2v_sd2` が標準カテゴリリスト (`t2i / i2i / t2v / i2v / r2v`) に含まれない** ため、`custom_groups` 設定なしでは「未知 endpoint」扱いとなり、dispatcher が rate-limit accounting を一切スキップしてしまうからです。高コストモデルがレートリミットなしで野放しになるのは安全とは言えないため、保守的なデフォルトを最初から入れています。
 
 これらの値は実運用での挙動を見て自由に調整してください。
 

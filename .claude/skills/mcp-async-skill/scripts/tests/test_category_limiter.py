@@ -34,6 +34,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from job_queue.category_limiter import (  # noqa: E402
     CategoryLimiter,
+    DEFAULT_ALIASES,
+    FORBIDDEN_ALIASES,
     HARDCODED_DEFAULT_EXHAUST_COOLDOWN,
     HARDCODED_DEFAULT_MAX_INFLIGHT,
     HARDCODED_DEFAULT_MIN_INTERVAL,
@@ -51,6 +53,7 @@ def _make_limiter(**overrides) -> CategoryLimiter:
         "i2i": {"max_inflight": 2, "min_interval": 0.0, "exhaust_cooldown": 120},
         "t2v": {"max_inflight": 1, "min_interval": 0.0, "exhaust_cooldown": 1800},
         "i2v": {"max_inflight": 1, "min_interval": 0.0, "exhaust_cooldown": 3600},
+        "r2v": {"max_inflight": 1, "min_interval": 0.0, "exhaust_cooldown": 3600},
     }
     for cat, vals in overrides.items():
         base_limits.setdefault(cat, {}).update(vals)
@@ -364,10 +367,12 @@ class TestPublicCategoryAPI(unittest.TestCase):
     def test_get_categories_returns_sorted_deterministic(self):
         lim = _make_limiter()
         cats = lim.get_categories()
-        self.assertEqual(cats, ["i2i", "i2v", "t2i", "t2v"])
+        self.assertEqual(cats, ["i2i", "i2v", "r2v", "t2i", "t2v"])
         # Mutating the returned list must not affect internal state
         cats.append("foo")
-        self.assertEqual(lim.get_categories(), ["i2i", "i2v", "t2i", "t2v"])
+        self.assertEqual(
+            lim.get_categories(), ["i2i", "i2v", "r2v", "t2i", "t2v"],
+        )
 
 
 class TestSetterCategoryRequired(unittest.TestCase):
@@ -403,11 +408,57 @@ class TestSetterCategoryRequired(unittest.TestCase):
         self.assertNotIn("foobar", lim._max_inflight)
 
 
+class TestForbiddenAliases(unittest.TestCase):
+    """lazy-v2.11.1: ``r2v`` was historically aliased to ``i2v`` but is now
+    rate-limited independently by the upstream MCP service. We strip any
+    ``aliases.r2v`` entry from user-provided config and emit a warning
+    so old configs do not silently collapse the two categories."""
+
+    def test_forbidden_aliases_set_contains_r2v(self):
+        self.assertIn("r2v", FORBIDDEN_ALIASES)
+
+    def test_default_aliases_do_not_alias_r2v(self):
+        self.assertNotIn("r2v", DEFAULT_ALIASES)
+        # r2i is still aliased; that intent is unchanged.
+        self.assertEqual(DEFAULT_ALIASES.get("r2i"), "i2i")
+
+    def test_user_supplied_r2v_alias_is_silently_dropped(self):
+        """User config may still carry the legacy ``aliases.r2v`` key —
+        the limiter strips it so r2v URLs get accounted as r2v."""
+        with self.assertLogs("job_queue.category_limiter", level="WARNING") as cm:
+            lim = CategoryLimiter({
+                "categories": ["t2i", "i2i", "t2v", "i2v", "r2v"],
+                "aliases": {"r2v": "i2v", "r2i": "i2i"},
+                "limits": {
+                    cat: {"max_inflight": 1, "min_interval": 0.0,
+                          "exhaust_cooldown": 60}
+                    for cat in ("t2i", "i2i", "t2v", "i2v", "r2v")
+                },
+            })
+        # r2v URL routes to r2v, not i2v
+        self.assertEqual(
+            lim.extract_category("https://kamui-code.ai/r2v/fal/refer-video"),
+            "r2v",
+        )
+        # r2i alias survives untouched
+        self.assertEqual(
+            lim.extract_category("https://kamui-code.ai/r2i/fal/refer"),
+            "i2i",
+        )
+        # Warning fired and mentions the dropped key
+        self.assertTrue(
+            any("aliases.r2v" in msg for msg in cm.output),
+            f"expected warning to mention aliases.r2v; got {cm.output!r}",
+        )
+
+
 class TestKnownCategoriesConstant(unittest.TestCase):
     """Sanity check on the module-level KNOWN_CATEGORIES constant."""
 
-    def test_known_categories_contains_t2i_i2i_t2v_i2v(self):
-        self.assertEqual(KNOWN_CATEGORIES, {"t2i", "i2i", "t2v", "i2v"})
+    def test_known_categories_contains_t2i_i2i_t2v_i2v_r2v(self):
+        self.assertEqual(
+            KNOWN_CATEGORIES, {"t2i", "i2i", "t2v", "i2v", "r2v"},
+        )
 
     def test_default_categories_when_no_config_given(self):
         """A bare ``CategoryLimiter()`` falls back to KNOWN_CATEGORIES."""
@@ -417,7 +468,9 @@ class TestKnownCategoriesConstant(unittest.TestCase):
 
 class TestExtractCategory(unittest.TestCase):
     """``extract_category`` derives the canonical category from an MCP
-    endpoint URL, applying alias resolution (r2i → i2i, r2v → i2v)."""
+    endpoint URL. ``r2i`` is still aliased to ``i2i``; ``r2v`` is now
+    its own category (lazy-v2.11.1+) because the upstream MCP service
+    rate-limits it independently from i2v."""
 
     def test_extracts_t2i(self):
         lim = _make_limiter()
@@ -440,11 +493,16 @@ class TestExtractCategory(unittest.TestCase):
             "i2i",
         )
 
-    def test_aliases_r2v_to_i2v(self):
+    def test_extracts_r2v_as_independent_category(self):
+        """lazy-v2.11.1: r2v is no longer an alias of i2v.
+
+        Upstream MCP rate-limits r2v separately from i2v, so collapsing
+        the two would cause spurious 429s on the i2v side.
+        """
         lim = _make_limiter()
         self.assertEqual(
             lim.extract_category("https://kamui-code.ai/r2v/fal/refer-video"),
-            "i2v",
+            "r2v",
         )
 
     def test_unknown_path_returns_none(self):

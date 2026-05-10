@@ -1,6 +1,8 @@
 # Per-Category Rate Limits
 
-`lazy-v2.11.0` 以降、カテゴリ (`t2i` / `i2i` / `t2v` / `i2v`) ごとに inflight・min_interval・429 cooldown を **独立した値で設定可能**になりました。アップストリーム MCP サービス側もカテゴリごとにローリング窓レートリミットを分けて運用しているため、クライアント側でも対応する個別値を設定できます。
+`lazy-v2.11.0` 以降、カテゴリ (`t2i` / `i2i` / `t2v` / `i2v` / `r2v`) ごとに inflight・min_interval・429 cooldown を **独立した値で設定可能**になりました。アップストリーム MCP サービス側もカテゴリごとにローリング窓レートリミットを分けて運用しているため、クライアント側でも対応する個別値を設定できます。
+
+> **`r2v` の独立化** (`lazy-v2.11.1+`): 当初 `r2v` は `i2v` の alias として実装されていましたが、アップストリーム MCP サービスが `r2v` を `i2v` と独立にレートリミットしていることが確認されたため、`r2v` を独立カテゴリとして扱うようになりました。旧 `queue_config.json` に `aliases.r2v` 設定が残っていても、起動時に自動で無視され警告ログが 1 回出力されます (詳細は本ページ末尾の「`r2v` の取り扱い」を参照)。
 
 ## 設定スキーマ (`queue_config.json`)
 
@@ -9,13 +11,14 @@
 ```json
 {
   "category_rate_limits": {
-    "categories": ["t2i", "i2i", "t2v", "i2v"],
-    "aliases": {"r2i": "i2i", "r2v": "i2v"},
+    "categories": ["t2i", "i2i", "t2v", "i2v", "r2v"],
+    "aliases": {"r2i": "i2i"},
     "limits": {
       "t2i": {"max_inflight": 3, "min_interval": 1.0, "exhaust_cooldown": 600},
       "i2i": {"max_inflight": 2, "min_interval": 1.0, "exhaust_cooldown": 3600},
       "t2v": {"max_inflight": 1, "min_interval": 1.0, "exhaust_cooldown": 1800},
-      "i2v": {"max_inflight": 1, "min_interval": 1.0, "exhaust_cooldown": 3600}
+      "i2v": {"max_inflight": 1, "min_interval": 1.0, "exhaust_cooldown": 3600},
+      "r2v": {"max_inflight": 1, "min_interval": 1.0, "exhaust_cooldown": 3600}
     }
   }
 }
@@ -46,9 +49,21 @@
 旧形式の値は **すべての設定済みカテゴリに同じ値で展開** されます。worker 起動時に `[CategoryLimiter] (instance ...) DEPRECATED: ...` という警告ログが 1 回出力されます。
 旧形式は `lazy-v2.13.0 以降で削除予定` です。新規インストールでは新形式を使用してください。
 
+> 旧形式の例で `aliases.r2v` が含まれている場合、`lazy-v2.11.1+` ではこの alias 設定は **強制的に削除** され、`r2v` URL は r2v カテゴリとして独立に集計されます (詳細は本ページ末尾の「`r2v` の取り扱い」を参照)。
+
 ### Fallback 挙動
 
-設定漏れに対する保険として、`limits.{cat}` または個別キーが欠けている場合はモジュールレベルのハードコード初期値 (`max_inflight=1`, `min_interval=1.0`, `exhaust_cooldown=3600`) が使われます。**正規の運用では `limits` を 4 カテゴリ × 3 キー全て明示してください。**
+設定漏れに対する保険として、`limits.{cat}` または個別キーが欠けている場合はモジュールレベルのハードコード初期値 (`max_inflight=1`, `min_interval=1.0`, `exhaust_cooldown=3600`) が使われます。**正規の運用では `limits` を 5 カテゴリ × 3 キー全て明示してください。**
+
+### `r2v` の取り扱い (lazy-v2.11.1+)
+
+過去の `queue_config.json` には `aliases: {"r2i": "i2i", "r2v": "i2v"}` のように、`r2v` (reference-to-video) を `i2v` の alias として宣言する設定が含まれていることがあります。
+
+- `lazy-v2.11.1` 以降、`CategoryLimiter` は **コードレベルで `aliases.r2v` を強制的に無視** します。
+- 起動時に `[CategoryLimiter] (instance ...) ignored forbidden alias keys in config (\`aliases.r2v\`): ...` という警告ログが 1 回出力されます。
+- これにより、`r2v` URL は **常に独立した `r2v` カテゴリ** として集計され、`i2v` 枠を消費しません。
+- `queue_config.json` 側の `aliases.r2v` を **削除し、`limits.r2v` を追加すること**を強く推奨します。
+- なお `r2i` (reference-to-image) は引き続き `i2i` の alias として扱われます (アップストリームでは `r2i` の独立レートリミットの有無が未確認のため)。
 
 ## Runtime API (`PATCH /api/config`)
 
