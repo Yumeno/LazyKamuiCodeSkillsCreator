@@ -238,14 +238,15 @@ class JobStore:
             List of job dicts ordered by updated_at ascending (oldest first).
         """
         with self._lock:
+            now_iso = _utc_now_iso()
             cur = self.conn.execute(
                 """
                 SELECT * FROM jobs
                 WHERE status = 'polling'
-                  AND (julianday('now') - julianday(REPLACE(updated_at, 'Z', ''))) * 86400.0 >= ?
+                  AND (julianday(?) - julianday(updated_at)) * 86400.0 >= ?
                 ORDER BY updated_at ASC
                 """,
-                (timeout_seconds,),
+                (now_iso, timeout_seconds),
             )
             return [dict(row) for row in cur.fetchall()]
 
@@ -274,15 +275,25 @@ class JobStore:
 
         Returns:
             Number of deleted jobs.
+
+        Note:
+            Both `now` and `updated_at` are computed in Python via
+            ``_utc_now_iso()`` so they share the same microsecond-precision
+            wall-clock source. Mixing SQLite's ``julianday('now')`` (which
+            is second-precision and lags behind ``_utc_now_iso()`` by a few
+            milliseconds) with Python-generated microsecond timestamps used
+            to make ``retention_seconds=0`` purges silently drop nothing
+            (regression introduced in commit ``95ebebb``).
         """
         with self._lock:
+            now_iso = _utc_now_iso()
             cur = self.conn.execute(
                 """
                 DELETE FROM jobs
                 WHERE status IN ('completed', 'failed')
-                  AND (julianday('now') - julianday(updated_at)) * 86400.0 >= ?
+                  AND (julianday(?) - julianday(updated_at)) * 86400.0 >= ?
                 """,
-                (retention_seconds,),
+                (now_iso, retention_seconds),
             )
             self.conn.commit()
             return cur.rowcount

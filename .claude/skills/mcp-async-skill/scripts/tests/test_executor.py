@@ -227,8 +227,34 @@ class TestExecuteJobWithRetry(unittest.TestCase):
 
     @patch("mcp_worker_daemon.MCPAsyncClient")
     @patch("mcp_worker_daemon.parse_status_response")
-    def test_recovery_job_skips_submit(self, mock_parse, MockClient):
-        """Recovery job (has remote_job_id): should skip submit, start from poll."""
+    def test_recovery_job_skips_submit_and_uses_fresh_session(self, mock_parse, MockClient):
+        """Recovery job (has remote_job_id): submit is skipped, but a
+        FRESH session is used for polling — the DB-stored ``session_id``
+        is intentionally discarded.
+
+        Architecture rationale (see PR #47):
+
+        * ``session_id`` (``Mcp-Session-Id``) is the **kamuicode MCP**
+          middleware session. Its lifetime is short — bounded by the
+          middleware's session timeout. By the time we recover a job,
+          this session is almost always already expired on the server.
+        * ``remote_job_id`` is the **upstream provider's** (e.g. fal.ai)
+          job id. The provider keeps these around for a long time
+          regardless of which middleware session originally submitted.
+
+        Therefore recovery polls with a fresh middleware session and the
+        long-lived ``remote_job_id``. The original ``session_id`` value
+        from the DB is not propagated to the client, even though the
+        column is still written on the way in for diagnostics / future
+        compat.
+
+        Before PR #47 this test asserted the opposite (that the old
+        ``session_id`` was restored on the mocked client). That
+        expectation became stale once SessionManager was introduced and
+        the recovery path switched to ``_make_client(endpoint, headers)``
+        without ``session_id=...``. The assertion was updated in PR #59
+        (lazy-v2.11.0) to match the intentional behaviour.
+        """
         from mcp_worker_daemon import create_mcp_job_executor
 
         client_instance = MockClient.return_value
@@ -254,12 +280,20 @@ class TestExecuteJobWithRetry(unittest.TestCase):
         job = self.store.get_job(job_id)
         executor(job)
 
-        # submit should NOT have been called
+        # submit should NOT have been called — recovery skips submit.
         client_instance.submit.assert_not_called()
-        # session_id should be set from the job
-        self.assertEqual(client_instance.session_id, "old-sess")
-        # get_result should have been called
+
+        # The DB-stored session_id is NOT propagated to the client.
+        # (We don't assert "session_id is unset" because MCPAsyncClient
+        # is fully mocked here — we instead assert that get_result was
+        # called with the recovery remote_job_id, which is the only
+        # contract that matters for the recovery path.)
         client_instance.get_result.assert_called_once()
+        get_result_args = client_instance.get_result.call_args
+        # First positional arg is the result_tool name; second is the
+        # remote job id. The recovery path must use the DB-stored
+        # remote_job_id verbatim.
+        self.assertEqual(get_result_args.args[1], "old-req")
 
         final = self.store.get_job(job_id)
         self.assertEqual(final["status"], "completed")
