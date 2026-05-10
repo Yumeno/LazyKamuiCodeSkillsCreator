@@ -26,6 +26,7 @@ Claude Code用のMCPスキルジェネレーター。非同期ジョブパター
 | **カテゴリ別制御** | t2i/i2i/t2v/i2vカテゴリ単位でのinflight制御・429自動リトライ・非429エラー時のカテゴリ即pause | 自動 | [📖](docs/category-limits.md) |
 | **per-category 個別レートリミット** | 各カテゴリに独立した max_inflight / min_interval / exhaust_cooldown を設定可能 (`limits.{cat}.{key}`)。サービス側のカテゴリ別レートリミットに合わせて調整 | `queue_config.json` | [📖](docs/category-limits.md) |
 | **Worker version handshake** | 上書きインストールで古い worker daemon が残った場合に stderr で 1 回警告。`X-Worker-Version` ヘッダー + `GET /api/version` | 自動 | [📖](docs/version-handshake.md) |
+| **DB スキーマ migration 基盤** | `PRAGMA user_version` ベースの簡易マイグレーション。Phase 1 では足場のみ追加 (実カラム変更は将来 migration で対応) | 自動 | [📖](docs/db-migration.md) |
 | **セッション管理** | MCPセッションをendpoint単位でキャッシュ。認証サーバーへの負荷を削減 | 自動 | |
 | **カテゴリpause/resume** | カテゴリ単位での手動一時停止・再開。他端末との枠共有時に便利 | `--pause-category` | |
 | **Queue Dashboard** | ブラウザから見えるキュー可視化Web UI。サマリー/カテゴリ/ジョブ一覧/失敗詳細/pause-resume。追加依存なし（Python stdlib + Vanilla JS） | 独立スキル | |
