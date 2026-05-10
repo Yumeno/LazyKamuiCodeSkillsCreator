@@ -1,5 +1,26 @@
 # Changelog
 
+## [lazy-v2.11.1](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.11.1) (2026-05-10)
+
+### Fixed
+- **`r2v` (reference-to-video) を独立カテゴリ化**: `r2v` は当初 `i2v` への alias として実装されていましたが、アップストリーム MCP サービスが `r2v` を `i2v` と独立にレートリミットしていることが確認されたため、独立カテゴリとして扱うよう修正しました。alias のままだと `r2v` ジョブが `i2v` 枠を消費し、`i2v` 側で予期しない 429 を誘発する可能性がありました。
+  - `KNOWN_CATEGORIES` に `r2v` を追加 (`{t2i, i2i, t2v, i2v, r2v}`)
+  - `DEFAULT_ALIASES` から `r2v` を削除 (`{r2i: i2i}` のみ残存)
+  - **`FORBIDDEN_ALIASES` 機構**: ユーザー `queue_config.json` に `aliases.r2v` が残っていても、起動時に **強制的に削除** + 警告ログを 1 回出力。利用者の queue_config.json を直接書き換える必要なく、自動で正しい挙動になります。
+  - `generate_skill.py` / `queue_config.example.json` の初期同梱 categories に `r2v` を追加 (`limits.r2v: {max_inflight: 1, min_interval: 1.0, exhaust_cooldown: 3600}`)
+  - `mcp_async_call.py --pause-category` の help を `(t2i, i2i, t2v, i2v, r2v)` に更新
+  - 詳細: [docs/category-limits.md](docs/category-limits.md) 「`r2v` の取り扱い (lazy-v2.11.1+)」
+
+### Compatibility
+- **lazy-v2.10.x / lazy-v2.11.0 の `queue_config.json` (`aliases: {"r2i": "i2i", "r2v": "i2v"}`) はそのまま動作します**。起動時に `[CategoryLimiter] (instance ...) ignored forbidden alias keys in config (\`aliases.r2v\`)` 警告が 1 回出力され、`r2v` URL は `r2v` 独立カテゴリとして集計されるようになります。
+- 既存利用者は `queue_config.json` の `aliases` から `r2v` を削除し、`limits.r2v` を追加することを推奨します (動作は自動で正しくなりますが、設定ファイルが意図と一致するほうが望ましい)。
+- **`r2i` (reference-to-image) は引き続き `i2i` の alias** として扱われます。`r2i` のアップストリーム独立レートリミットの有無は未確認のため、保守的にこの仕様を維持します。確定情報が入り次第、別 PR で対応予定です。
+
+### Tests
+- 新規テスト: `test_category_limiter.py` の `TestForbiddenAliases` クラス (3 tests) — `FORBIDDEN_ALIASES` 定数 / `DEFAULT_ALIASES` から r2v 除外 / ユーザー `aliases.r2v` の silent drop + 警告発火を検証
+- 更新テスト: `test_extracts_r2v_as_independent_category` (旧 `test_aliases_r2v_to_i2v` を置き換え) / `TestKnownCategoriesConstant` を r2v 含む 5 カテゴリに更新 / `TestPublicCategoryAPI.test_get_categories_returns_sorted_deterministic` を 5 カテゴリ並び順に更新
+- 全 `scripts/tests/` で 418 tests pass (lazy-v2.11.0 から +3)
+
 ## [lazy-v2.11.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.11.0) (2026-05-10)
 
 ### Added

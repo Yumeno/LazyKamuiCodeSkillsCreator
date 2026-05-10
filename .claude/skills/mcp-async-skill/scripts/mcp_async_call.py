@@ -1311,7 +1311,7 @@ Examples:
     queue_group.add_argument("--show-args", action="store_true",
                              help="Include original submit args in --list / --wait responses")
     queue_group.add_argument("--pause-category", metavar="CATEGORY",
-                             help="Pause a category (t2i, i2i, t2v, i2v)")
+                             help="Pause a category (t2i, i2i, t2v, i2v, r2v)")
     queue_group.add_argument("--resume-category", metavar="CATEGORY",
                              help="Resume a paused category")
 

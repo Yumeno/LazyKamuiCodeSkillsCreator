@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """User-defined custom-group rate limiting (PR4 / #60).
 
-Categories (``t2i`` / ``i2i`` / ``t2v`` / ``i2v``) cover the common
+Categories (``t2i`` / ``i2i`` / ``t2v`` / ``i2v`` / ``r2v``) cover the common
 case but cannot express "throttle these specific endpoints together
 regardless of category". The upstream MCP service applies extra,
 narrower rate limits to certain high-cost models (e.g. video models

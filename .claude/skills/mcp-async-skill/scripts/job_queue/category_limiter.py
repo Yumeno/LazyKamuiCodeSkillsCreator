@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Category-level rate limiting for MCP job queue.
 
-Manages per-category (t2i, i2i, t2v, i2v) dispatch gating with
+Manages per-category (t2i, i2i, t2v, i2v, r2v) dispatch gating with
 **per-category individual values** for inflight, min_interval, and
 429 cooldown:
 
@@ -39,9 +39,16 @@ from .limiter_state import LimiterStateMixin
 
 logger = logging.getLogger(__name__)
 
-KNOWN_CATEGORIES: set[str] = {"t2i", "i2i", "t2v", "i2v"}
+KNOWN_CATEGORIES: set[str] = {"t2i", "i2i", "t2v", "i2v", "r2v"}
 
-DEFAULT_ALIASES: dict[str, str] = {"r2i": "i2i", "r2v": "i2v"}
+DEFAULT_ALIASES: dict[str, str] = {"r2i": "i2i"}
+
+# Aliases that are forbidden at runtime regardless of user config.
+# `r2v` was historically aliased to `i2v`, but the upstream MCP service
+# now applies r2v rate limits independently from i2v, so collapsing the
+# two would cause spurious 429s on the i2v side. We strip any
+# `aliases.r2v` entry from user-provided config and warn once.
+FORBIDDEN_ALIASES: frozenset[str] = frozenset({"r2v"})
 
 # Hardcoded fallback values for categories / keys missing from `limits`.
 # The canonical schema is to fully populate `limits.{cat}.{key}` for each
@@ -79,10 +86,24 @@ class CategoryLimiter(LimiterStateMixin):
                 set(limits_block.keys()) if limits_block else set(KNOWN_CATEGORIES)
             )
 
+        user_aliases = dict(config.get("aliases", {}))
+        dropped_forbidden = [k for k in user_aliases if k in FORBIDDEN_ALIASES]
+        for k in dropped_forbidden:
+            user_aliases.pop(k, None)
         self._aliases: dict[str, str] = {
             **DEFAULT_ALIASES,
-            **config.get("aliases", {}),
+            **user_aliases,
         }
+        if dropped_forbidden:
+            logger.warning(
+                "[CategoryLimiter] (instance %s) ignored forbidden alias keys "
+                "in config (`aliases.%s`): these endpoint prefixes now have "
+                "independent server-side rate limits and must be tracked as "
+                "their own categories. Update `queue_config.json` to remove "
+                "the alias entry. See docs/category-limits.md.",
+                id(self),
+                ", aliases.".join(dropped_forbidden),
+            )
 
         # ---- Per-category limits (dict) ----
         self._max_inflight: dict[str, int] = {}
