@@ -72,7 +72,7 @@
 
 ### Compatibility
 - **lazy-v2.10.x の queue_config.json (旧 flat schema) は引き続き動作**します (起動時に `[CategoryLimiter] (instance ...) DEPRECATED: ...` 警告ログが 1 回出力)
-- **lazy-v2.10.x dashboard は引き続き動作**します (`GET /api/config` の旧互換ミラーキーで UI 値が空にならない)。ただし旧 dashboard から値編集すると **新 worker は全カテゴリに一括適用** します。per-category 編集には `lazy-v2.12.0` 以降の dashboard が必要。
+- **lazy-v2.10.x dashboard は引き続き動作**します (`GET /api/config` の旧互換ミラーキーで UI 値が空にならない)。ただし旧 dashboard から値編集すると **新 worker は全カテゴリに一括適用** します。per-category 編集には `lazy-v2.11.0` 以降の dashboard (本リリース同梱) が必要。
 - **lazy-v2.10.x worker と lazy-v2.11.0 client の組み合わせ**: 新クライアントは旧 worker から `X-Worker-Version` が返らないことを検知し、stderr に「pre-v2.11.0 worker の可能性、shutdown して再起動を」と 1 回警告します。処理は止めません (skew 中でも動く API パスがあるため)。**新版を上書きインストールする前に `curl -X POST http://127.0.0.1:54321/api/worker/shutdown` で古い worker を停止することを推奨** (詳細: [docs/version-handshake.md](docs/version-handshake.md))。
 - **`custom_groups` キーが無い既存 `queue_config.json`**: 完全互換。`custom_groups` は空 dict 扱いとなり、すべての endpoint がカテゴリ経由でルーティングされます (lazy-v2.10.x と同じ挙動)。新規インストールでは Seedance v2.0 動画モデル群 (`t2v_sd2` / `i2v_sd2` / `r2v_sd2`) が初期同梱されます — 既存ユーザーが Seedance v2.0 モデルを使う場合は `queue_config.json` に手動で追加するか、新規スキル生成 (`generate_skill.py`) を流すと反映されます。
 - **lazy-v2.10.x dashboard との組み合わせ**: dashboard は `custom_groups` セクションを表示しませんが、worker の HTTP API は引き続き動作します。`/api/config` の `custom_groups` フィールドは旧 dashboard には無視されるため、`category_rate_limits` の旧互換ミラーキーと同じく "ignore unknown fields" 戦略で安全に共存します。
