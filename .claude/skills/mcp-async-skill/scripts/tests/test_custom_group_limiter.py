@@ -452,5 +452,32 @@ class TestStatusReporting(unittest.TestCase):
         self.assertEqual(cfg["exhaust_cooldown"], 7200)
 
 
+class TestTouchSubmitUnknownGuard(unittest.TestCase):
+    """``touch_submit`` must respect the same "unknown keys create no
+    state" contract as ``can_submit`` / ``acquire_inflight``.
+
+    Mirror of CategoryLimiter's same-named test class. Without the
+    subclass guard the LimiterStateMixin would happily insert an
+    entry into ``_last_submit`` for any key, growing the dict
+    unboundedly if a caller fed it raw endpoint URLs by mistake.
+    """
+
+    def test_touch_submit_unknown_creates_no_state(self):
+        gl = _make_limiter(**{"g": {"endpoints": ["*"], "max_inflight": 1}})
+        gl.touch_submit("nope")
+        self.assertNotIn("nope", gl._last_submit)
+
+    def test_touch_submit_none_is_noop(self):
+        gl = _make_limiter(**{"g": {"endpoints": ["*"], "max_inflight": 1}})
+        gl.touch_submit(None)
+        self.assertEqual(gl._last_submit, {})
+
+    def test_touch_submit_known_records_timestamp(self):
+        gl = _make_limiter(**{"g": {"endpoints": ["*"], "max_inflight": 1}})
+        gl.touch_submit("g")
+        self.assertIn("g", gl._last_submit)
+        self.assertGreater(gl._last_submit["g"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

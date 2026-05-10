@@ -261,6 +261,20 @@ class CustomGroupLimiter(LimiterStateMixin):
     # 429 / pause overrides — restrict to known groups
     # ------------------------------------------------------------------
 
+    def touch_submit(self, group: str | None):
+        """Update last-submit timestamp for ``min_interval`` enforcement.
+
+        Overrides the mixin to enforce the "unknown keys create no
+        state" contract that ``can_submit`` / ``acquire_inflight``
+        already follow. Without this guard the mixin would happily
+        insert an entry into ``_last_submit`` for an arbitrary string,
+        growing the dict unboundedly if a caller ever mistakenly fed
+        it raw endpoint URLs.
+        """
+        if group is None or group not in self._patterns:
+            return
+        super().touch_submit(group)
+
     def force_cooldown(self, group: str | None):
         if group is None or group not in self._patterns:
             return
