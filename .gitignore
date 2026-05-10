@@ -17,3 +17,14 @@ output/
 mcp*.json
 tools*
 __pycache__/
+
+# Generated skills (each user runs generate_skill.py to produce these).
+# Re-introduction would re-trigger the issue that prompted the
+# 2026-05-10 history rewrite (Issue #69).
+.claude/skills/t2i-*/
+.claude/skills/i2i-*/
+.claude/skills/t2v-*/
+.claude/skills/i2v-*/
+.claude/skills/r2i-*/
+.claude/skills/r2v-*/
+.claude/skills/file-upload-*/

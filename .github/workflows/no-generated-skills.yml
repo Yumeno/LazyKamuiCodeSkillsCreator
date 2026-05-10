@@ -1,0 +1,20 @@
+name: Block Generated Skills Re-introduction
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject committed generated skills
+        run: |
+          set -e
+          bad="$(git ls-files | grep -E '^\.claude/skills/(t2i-|i2i-|t2v-|i2v-|r2i-|r2v-|file-upload-)' || true)"
+          if [ -n "$bad" ]; then
+            echo "ERROR: generated skills must not be committed. Re-introduction would re-cause the 2026-05-10 history rewrite issue (#69)."
+            echo "$bad" | head -20
+            exit 1
+          fi
+          echo "OK: no generated skills committed."
