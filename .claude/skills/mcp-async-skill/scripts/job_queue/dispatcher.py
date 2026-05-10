@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 from . import db
 from .category_limiter import CategoryLimiter
+from .custom_group_limiter import CustomGroupLimiter
 
 
 class QueueConfig:
@@ -50,6 +51,9 @@ class QueueConfig:
             )
 
         cfg.category_rate_limits = d.get("category_rate_limits", {})
+        # PR4 (#60): user-defined endpoint groups with their own
+        # rate limits, overriding category accounting on match.
+        cfg.custom_groups = d.get("custom_groups", {})
         cfg.stale_polling_timeout = float(
             d.get("stale_polling_timeout_seconds", 1800.0)
         )
@@ -93,6 +97,12 @@ class Dispatcher:
         self.category_limiter = CategoryLimiter(
             getattr(config, "category_rate_limits", None)
         )
+        # PR4 (#60): user-defined groups override category accounting on
+        # match. An empty group config (= no groups configured) leaves
+        # the category_limiter as the sole limiter.
+        self.group_limiter = CustomGroupLimiter(
+            getattr(config, "custom_groups", None)
+        )
         self._last_run_time: dict[str, float] = {}
         self._pause_until: dict[str, float] = {}
         self._endpoint_paused: set[str] = set()
@@ -100,6 +110,36 @@ class Dispatcher:
         self._pool = ThreadPoolExecutor(max_workers=max_workers)
         self._running = False
         self._thread: threading.Thread | None = None
+
+    def _resolve_limiter(self, endpoint: str):
+        """Pick the limiter responsible for ``endpoint``.
+
+        Returns ``(limiter, key)`` where:
+
+        * ``limiter`` is :class:`CustomGroupLimiter` when ``endpoint``
+          matches a configured custom group, otherwise
+          :class:`CategoryLimiter`, otherwise ``None``.
+        * ``key`` is the matched group name / extracted category /
+          ``None`` (truly unknown endpoint).
+
+        PR4 contract (PHASE1_PLAN_v3 fix #1 / #11): callers MUST treat
+        ``key=None`` (or ``limiter=None``) as "out of accounting scope"
+        and skip every rate-limit gate. The dispatcher does so for
+        category-less endpoints today and continues to do so for
+        endpoints that match no group AND no recognised category.
+
+        This is the single funnel through which dispatch / run paths
+        reach the rate limiters. The grep checklist in the PR4 PR body
+        verifies that no other call site touches ``self.category_limiter``
+        or ``self.group_limiter`` directly except the constructor.
+        """
+        group = self.group_limiter.extract_group(endpoint)
+        if group is not None:
+            return self.group_limiter, group
+        cat = self.category_limiter.extract_category(endpoint)
+        if cat is None:
+            return None, None
+        return self.category_limiter, cat
 
     def pause_endpoint(self, endpoint: str, seconds: float):
         """Suspend new dispatches to an endpoint for *seconds* seconds."""
@@ -136,21 +176,25 @@ class Dispatcher:
         Returns the number of jobs dispatched in this round.
         """
         dispatched = 0
-        dispatched_categories: set[str] = set()
+        # Track keys we have already dispatched against this round to
+        # avoid bursts across multiple endpoints sharing the same key
+        # (category or group). ``None`` keys are never inserted —
+        # category-less / unmatched endpoints have no shared accounting
+        # bucket, so each one can dispatch independently.
+        dispatched_keys: set[tuple[int, str]] = set()
 
-        # --- Phase 1: pending jobs (existing logic) ---
+        # --- Phase 1: pending jobs ---
         endpoints = self.store.get_pending_endpoints()
 
         for ep in endpoints:
-            # Check category limit
-            category = self.category_limiter.extract_category(ep)
-            if not self.category_limiter.can_submit(category):
-                continue
+            limiter, key = self._resolve_limiter(ep)
 
-            # Limit to one dispatch per category per round to avoid
-            # submit bursts across different endpoints in the same category
-            if category is not None and category in dispatched_categories:
-                continue
+            # Limiter / key gating: only meaningful when we have one.
+            if limiter is not None and key is not None:
+                if not limiter.can_submit(key):
+                    continue
+                if (id(limiter), key) in dispatched_keys:
+                    continue
 
             # Check endpoint pause (non-429 error pause)
             if ep in self._endpoint_paused:
@@ -178,22 +222,24 @@ class Dispatcher:
 
             # Dispatch as many pending jobs as slots allow
             while available_slots > 0:
-                # Re-check category limit before each dispatch
-                if not self.category_limiter.can_submit(category):
-                    break
+                # Re-check limiter before each dispatch (only when applicable)
+                if limiter is not None and key is not None:
+                    if not limiter.can_submit(key):
+                        break
 
                 job = self.store.get_oldest_pending(ep)
                 if job is None:
                     break
 
                 self.store.update_status(job["id"], "running")
-                self.category_limiter.touch_submit(category)
+                if limiter is not None and key is not None:
+                    limiter.touch_submit(key)
                 self._last_run_time[ep] = time.monotonic()
                 self._pool.submit(self._run_job, job)
                 dispatched += 1
                 available_slots -= 1
-                if category is not None:
-                    dispatched_categories.add(category)
+                if limiter is not None and key is not None:
+                    dispatched_keys.add((id(limiter), key))
 
                 # After first dispatch, re-check interval for subsequent jobs
                 if min_interval > 0:
@@ -203,9 +249,9 @@ class Dispatcher:
         recovering_endpoints = self.store.get_recovering_endpoints()
 
         for ep in recovering_endpoints:
-            # Check category pause (but NOT quota — recovery doesn't consume a new submit)
-            category = self.category_limiter.extract_category(ep)
-            if category is not None and self.category_limiter.is_paused(category):
+            # Check pause (but NOT quota — recovery doesn't consume a new submit)
+            limiter, key = self._resolve_limiter(ep)
+            if limiter is not None and key is not None and limiter.is_paused(key):
                 continue
 
             # Check endpoint pause
@@ -267,17 +313,26 @@ class Dispatcher:
         return json.dumps(detail, ensure_ascii=False)
 
     def _run_job(self, job: dict):
-        """Execute a job via the injected executor."""
-        category = self.category_limiter.extract_category(job["endpoint"])
+        """Execute a job via the injected executor.
+
+        Resolves the limiter once via :meth:`_resolve_limiter` and uses
+        it for inflight acquire/release, 429 cooldown, and success/error
+        reporting. ``limiter is None`` (unknown endpoint with no
+        category and no group match) means "no rate-limit accounting" —
+        the executor still runs, but no inflight state is created and
+        no per-key cooldown is applied. The endpoint-level
+        ``pause_endpoint`` cooldown still fires for safety.
+        """
+        endpoint = job["endpoint"]
+        limiter, key = self._resolve_limiter(endpoint)
         acquired = (
-            self.category_limiter.acquire_inflight(category)
-            if category else False
+            limiter.acquire_inflight(key) if (limiter is not None and key is not None) else False
         )
         had_error = False
         try:
             self.job_executor(job)
-            if category:
-                self.category_limiter.record_success(category)
+            if limiter is not None and key is not None:
+                limiter.record_success(key)
         except Exception as e:
             had_error = True
             resp = getattr(e, "response", None)
@@ -300,16 +355,19 @@ class Dispatcher:
 
             if status_code == 429:
                 # 429 does NOT consume server quota → requeue + cooldown
-                if category:
-                    self.category_limiter.force_cooldown(category)
-                    self.category_limiter.record_429(category)
-                # Always set endpoint-level cooldown (covers unknown categories).
-                # v3 fix M3: use the public per-category getter — for unknown
-                # categories this returns the hardcoded default cooldown.
-                self.pause_endpoint(
-                    job["endpoint"],
-                    self.category_limiter.get_exhaust_cooldown(category),
-                )
+                if limiter is not None and key is not None:
+                    limiter.force_cooldown(key)
+                    limiter.record_429(key)
+                # Always set endpoint-level cooldown. For an unknown
+                # endpoint we fall back to CategoryLimiter's hardcoded
+                # default — there's no group/category-specific value to
+                # use, but we still want SOMETHING so we don't
+                # immediately retry a 429.
+                if limiter is not None and key is not None:
+                    cooldown = limiter.get_exhaust_cooldown(key)
+                else:
+                    cooldown = self.category_limiter.get_exhaust_cooldown(None)
+                self.pause_endpoint(endpoint, cooldown)
                 self.store.update_status(
                     job["id"], "pending",
                     error=(
@@ -323,7 +381,6 @@ class Dispatcher:
                 self.store.update_status(
                     job["id"], "failed", error=error_detail
                 )
-                endpoint = job["endpoint"]
                 self._endpoint_paused.add(endpoint)
                 self._endpoint_pause_reason[endpoint] = {
                     "reason": "submit_error",
@@ -337,10 +394,8 @@ class Dispatcher:
                     endpoint, status_code,
                 )
         finally:
-            if acquired:
-                self.category_limiter.release_inflight(
-                    category, success=not had_error
-                )
+            if acquired and limiter is not None and key is not None:
+                limiter.release_inflight(key, success=not had_error)
 
     def start(self):
         """Start the dispatcher loop in a background thread."""

@@ -30,6 +30,18 @@
   - migration 失敗時は connection を close して例外を re-raise (Windows 環境でファイルハンドル即解放)
   - 詳細: [docs/db-migration.md](docs/db-migration.md)
 - 新規テスト: `test_db_migrations.py` (12 tests), 新規 DB / pre-PR3 DB upgrade / missing column rejection / extra columns warn / type drift acceptance / registry shape / driver behaviour をカバー
+- **Custom Groups (endpoint-pattern rate limiting)** (#60): endpoint URL の glob パターンで独自グループを定義し、カテゴリと独立に inflight / min_interval / 429 cooldown を制御
+  - 新スキーマ `custom_groups.{name}` (`endpoints` / `max_inflight` / `min_interval` / `exhaust_cooldown`)
+  - **マッチした endpoint はカテゴリ計上から完全除外** — 群を厳しく絞ってもカテゴリ全体には影響しない
+  - First-match-wins 順序 (Python 3.7+ の dict 挿入順保証)、glob は fnmatch ベース case-sensitive
+  - 新規モジュール `job_queue/custom_group_limiter.py` + 共通 `job_queue/limiter_state.py` (`LimiterStateMixin`)。CategoryLimiter も同 mixin に再構成し、状態管理を 1 箇所に集約 (バグ修正・拡張が一度で済む)
+  - 新規 API: `GET /api/groups`, `POST /api/groups/{name}/{pause|resume}` (404 with `available_groups`), `PATCH /api/config` の `groups` block 受理 (per-category と同じ validation pattern)
+  - `GET /api/config` / `GET /api/stats` レスポンスに `custom_groups` セクション追加
+  - `POST /api/jobs` の pause warning が resolved limiter (group/category) を反映
+  - dispatcher は新ヘルパー `_resolve_limiter(endpoint) -> (limiter, key)` 1 箇所経由で limiter にアクセス。group → category → `(None, None)` の優先順位、unknown endpoint は per-key accounting なしで dispatch (PR1 `TestUnknownCategoryEndpointDispatch` 契約維持)
+  - **Bytedance Seedance v2.0 動画モデル群 (`t2v_sd2` / `i2v_sd2` / `r2v_sd2`) を初期同梱** (`generate_skill.py` テンプレート + `queue_config.example.json`)。URL prefix が標準カテゴリ list 外のため、未設定だと rate-limit accounting がスキップされる問題への安全策
+  - 詳細: [docs/custom-groups.md](docs/custom-groups.md)
+- 新規テスト: `test_custom_group_limiter.py` (38 tests), `test_dispatcher_groups.py` (12 tests), `test_worker_groups.py` (16 tests), `test_generate_skill_queue.py` の Seedance pin (3 tests) — 構築 / glob / concurrent smoke / unknown handling / dispatcher routing isolation / HTTP API / template defaults をカバー
 
 ### Changed (BREAKING)
 - **`set_max_inflight(cat, value)` の `cat` 引数必須化**: lazy-v2.10.x の単一引数 `set_max_inflight(value)` (全カテゴリ一括変更) は削除。`set_min_interval` / `set_exhaust_cooldown` も同様。worker の `PATCH /api/config` ハンドラが「全カテゴリ一括」の API レイヤを emulate する。
@@ -53,6 +65,8 @@
 - **lazy-v2.10.x の queue_config.json (旧 flat schema) は引き続き動作**します (起動時に `[CategoryLimiter] (instance ...) DEPRECATED: ...` 警告ログが 1 回出力)
 - **lazy-v2.10.x dashboard は引き続き動作**します (`GET /api/config` の旧互換ミラーキーで UI 値が空にならない)。ただし旧 dashboard から値編集すると **新 worker は全カテゴリに一括適用** します。per-category 編集には `lazy-v2.12.0` 以降の dashboard が必要。
 - **lazy-v2.10.x worker と lazy-v2.11.0 client の組み合わせ**: 新クライアントは旧 worker から `X-Worker-Version` が返らないことを検知し、stderr に「pre-v2.11.0 worker の可能性、shutdown して再起動を」と 1 回警告します。処理は止めません (skew 中でも動く API パスがあるため)。**新版を上書きインストールする前に `curl -X POST http://127.0.0.1:54321/api/worker/shutdown` で古い worker を停止することを推奨** (詳細: [docs/version-handshake.md](docs/version-handshake.md))。
+- **`custom_groups` キーが無い既存 `queue_config.json`**: 完全互換。`custom_groups` は空 dict 扱いとなり、すべての endpoint がカテゴリ経由でルーティングされます (lazy-v2.10.x と同じ挙動)。新規インストールでは Seedance v2.0 動画モデル群 (`t2v_sd2` / `i2v_sd2` / `r2v_sd2`) が初期同梱されます — 既存ユーザーが Seedance v2.0 モデルを使う場合は `queue_config.json` に手動で追加するか、新規スキル生成 (`generate_skill.py`) を流すと反映されます。
+- **lazy-v2.10.x dashboard との組み合わせ**: dashboard は `custom_groups` セクションを表示しませんが、worker の HTTP API は引き続き動作します。`/api/config` の `custom_groups` フィールドは旧 dashboard には無視されるため、`category_rate_limits` の旧互換ミラーキーと同じく "ignore unknown fields" 戦略で安全に共存します。
 
 ## [lazy-v2.10.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.10.0) (2026-04-23)
 

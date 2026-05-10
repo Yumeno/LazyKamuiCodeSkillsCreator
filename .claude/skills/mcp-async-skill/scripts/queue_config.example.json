@@ -25,5 +25,34 @@
       "t2v": {"max_inflight": 1, "min_interval": 1.0, "exhaust_cooldown": 1800},
       "i2v": {"max_inflight": 1, "min_interval": 1.0, "exhaust_cooldown": 3600}
     }
+  },
+  "custom_groups": {
+    "t2v_sd2": {
+      "endpoints": [
+        "https://kamui-code.ai/t2v_sd2/fal/bytedance/seedance-v2.0",
+        "https://kamui-code.ai/t2v_sd2/fal/bytedance/seedance-v2.0-fast"
+      ],
+      "max_inflight": 1,
+      "min_interval": 10,
+      "exhaust_cooldown": 3600
+    },
+    "i2v_sd2": {
+      "endpoints": [
+        "https://kamui-code.ai/i2v_sd2/fal/bytedance/seedance-v2.0",
+        "https://kamui-code.ai/i2v_sd2/fal/bytedance/seedance-v2.0-fast"
+      ],
+      "max_inflight": 1,
+      "min_interval": 10,
+      "exhaust_cooldown": 3600
+    },
+    "r2v_sd2": {
+      "endpoints": [
+        "https://kamui-code.ai/r2v_sd2/fal/bytedance/seedance-v2.0-reference",
+        "https://kamui-code.ai/r2v_sd2/fal/bytedance/seedance-v2.0-fast-reference"
+      ],
+      "max_inflight": 1,
+      "min_interval": 10,
+      "exhaust_cooldown": 3600
+    }
   }
 }
