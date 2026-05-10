@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] — targeting lazy-v2.11.0
+## [lazy-v2.11.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.11.0) (2026-05-10)
 
 ### Added
 - **Per-category individual rate limits** (#59): t2i / i2i / t2v / i2v ごとに `max_inflight` / `min_interval` / `exhaust_cooldown` を独立設定可能
