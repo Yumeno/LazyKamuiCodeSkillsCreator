@@ -53,11 +53,25 @@ logger = logging.getLogger(__name__)
 # Migration 001 — bootstrap existing v0 DBs to user_version=1
 # ---------------------------------------------------------------------
 
-# Required columns on the ``jobs`` table after the initial
-# ``CREATE TABLE IF NOT EXISTS`` runs in ``db.py``. We check NAMES only
-# (PHASE1_PLAN_v3 fix #7); types, NOT NULL, and DEFAULT clauses are
-# intentionally NOT validated by Phase 1's migration 001.
-EXPECTED_JOBS_COLUMNS: frozenset[str] = frozenset({
+# The required ``jobs`` columns AS OF lazy-v2.11.0 (the version that
+# introduced the migration framework). This set is **frozen** — never
+# mutate it when a future migration adds columns.
+#
+# Why frozen: imagine migration 002 adds a ``priority`` column. If we
+# also added ``priority`` to this set, a user upgrading directly from
+# lazy-v2.10.x (``user_version=0``) would have migration 001 reject
+# their DB as "missing required column priority" before migration 002
+# even gets a chance to add it. Direct multi-version upgrades would be
+# broken.
+#
+# The contract is: migration 001 verifies the v1 baseline, and each
+# subsequent migration is responsible for adding / verifying its own
+# columns via ``ALTER TABLE`` (or a guarded ``PRAGMA table_info``
+# check) inside its own function body.
+#
+# We check column NAMES only (PHASE1_PLAN_v3 fix #7); types,
+# NOT NULL, and DEFAULT clauses are intentionally NOT validated.
+V1_JOBS_COLUMNS: frozenset[str] = frozenset({
     "id", "endpoint", "submit_tool", "args",
     "status_tool", "result_tool", "headers",
     "session_id", "remote_job_id",
@@ -73,10 +87,10 @@ def migrate_001_initial(conn: sqlite3.Connection) -> None:
         :class:`~job_queue.db.JobStore` MUST have already executed
         ``CREATE TABLE IF NOT EXISTS jobs (...)`` before calling this.
         We therefore expect the ``jobs`` table to exist and only check
-        that its column names cover :data:`EXPECTED_JOBS_COLUMNS`.
+        that its column names cover :data:`V1_JOBS_COLUMNS`.
 
     Behaviour:
-        * If the ``jobs`` table is missing required columns →
+        * If the ``jobs`` table is missing required v1 columns →
           raise :class:`RuntimeError` ("schema drift detected").
         * If extra unknown columns exist (e.g. from a future migration
           we don't know about) → log a warning but allow startup.
@@ -90,6 +104,12 @@ def migrate_001_initial(conn: sqlite3.Connection) -> None:
         Future migrations may tighten this, but migration 001 is
         deliberately lenient so that old DBs created by SQLite's
         type-affinity quirks still pass.
+
+    Note (frozen baseline):
+        :data:`V1_JOBS_COLUMNS` is the lazy-v2.11.0 baseline and MUST
+        NOT be updated when later migrations add columns. See the
+        comment on that constant for why mutating it would break
+        direct upgrades from lazy-v2.10.x to a much later version.
     """
     cur = conn.execute("PRAGMA table_info(jobs)")
     actual_columns = {row[1] for row in cur.fetchall()}
@@ -104,8 +124,8 @@ def migrate_001_initial(conn: sqlite3.Connection) -> None:
             "initialization bug — please file an issue."
         )
 
-    missing = EXPECTED_JOBS_COLUMNS - actual_columns
-    extra = actual_columns - EXPECTED_JOBS_COLUMNS
+    missing = V1_JOBS_COLUMNS - actual_columns
+    extra = actual_columns - V1_JOBS_COLUMNS
 
     if missing:
         raise RuntimeError(

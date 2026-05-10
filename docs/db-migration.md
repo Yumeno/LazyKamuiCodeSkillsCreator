@@ -66,7 +66,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
 
 **やること:**
 - `PRAGMA table_info(jobs)` で実際のカラム名集合を取得
-- `EXPECTED_JOBS_COLUMNS` （Python 側の集合）と差分を取る
+- `V1_JOBS_COLUMNS` （Python 側の `frozenset`、**lazy-v2.11.0 ベースラインで凍結**）と差分を取る
 - 必須カラムが欠けていれば `RuntimeError` で停止
 - 余分なカラムがあれば warning ログだけ出して続行（forward-compat）
 - 最後に `PRAGMA user_version = 1` を bump（apply_migrations 側で）
@@ -77,6 +77,21 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
 - `DEFAULT` 句の検証
 
 これは Phase 1 の意図的なスコープです。**「required columns exist」だけ確認** することで、SQLite の type-affinity 由来の些細な差異で既存 DB を弾くリスクを避けています。将来の migration が必要なら型チェックを追加してよいですが、migration 001 自体は forward-compatible に保ちます。
+
+### ⚠️ `V1_JOBS_COLUMNS` は永久凍結
+
+`V1_JOBS_COLUMNS` は **lazy-v2.11.0 時点の jobs テーブル必須カラム集合** です。**将来 migration がカラムを追加しても、この集合は絶対に更新しないでください**。
+
+理由は「直接アップグレードパスの破綻」です。例えば:
+
+1. PR3 (現在): `V1_JOBS_COLUMNS = {id, endpoint, ...}` (14 列)
+2. 将来 PR: migration 002 で `priority` カラムを追加。**もし `V1_JOBS_COLUMNS` も更新してしまうと**...
+3. lazy-v2.10.x ユーザーが lazy-v2.12.0+ に直接アップグレード
+4. `user_version=0` の DB に対して migration 001 が走る
+5. migration 001 が「`priority` が無い」と判定して `RuntimeError`
+6. → migration 002 に到達できず **直接アップグレードが破綻**
+
+`V1_JOBS_COLUMNS` を凍結することで、migration 001 は常に「v1 ベースラインの必須カラム」を検証し、その後 migration 002 / 003 / ... が順に列を追加していくチェーンが成立します。
 
 ## エラー時の挙動
 
@@ -109,14 +124,19 @@ to create a fresh DB.
 
 新しいスキーマ変更が必要になったとき:
 
-1. **`migrations.py` に migration 関数を追加**
+1. **`migrations.py` に migration 関数を追加 (column 存在チェック付き)**
+
+   新規 DB は `db.py` の `CREATE TABLE` で既に新カラムを持っているため、`ALTER TABLE` をそのまま実行すると "duplicate column name" エラーになります。事前に `PRAGMA table_info` で確認してから追加してください:
 
    ```python
    def migrate_002_add_priority(conn: sqlite3.Connection) -> None:
        """Add ``priority`` column to ``jobs``, defaulting to 0."""
-       conn.execute(
-           "ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 0"
-       )
+       cur = conn.execute("PRAGMA table_info(jobs)")
+       existing = {row[1] for row in cur.fetchall()}
+       if "priority" not in existing:
+           conn.execute(
+               "ALTER TABLE jobs ADD COLUMN priority INTEGER DEFAULT 0"
+           )
    ```
 
 2. **`MIGRATIONS` に追加**
@@ -130,16 +150,23 @@ to create a fresh DB.
 
 3. **`db.py` の `CREATE TABLE IF NOT EXISTS` も新カラムを含むように更新**
 
-   新規 DB は `CREATE TABLE` で `priority` を持って作られ、既存 DB は migration 002 で追加される、という二段構えになります。`migrate_002_add_priority` は **既存 DB のみが通る**（新規 DB は CREATE TABLE で既に持っているので）ことを念頭に置いてください — `IF NOT EXISTS` を使うか、`PRAGMA table_info` で事前判定するかは migration 側の判断です。
+   新規 DB は `CREATE TABLE` で `priority` を持って作られ、既存 DB は migration 002 で追加される、という二段構えになります。順序は変わらず:
+   - `_init_schema_and_migrations` は `CREATE TABLE` → `apply_migrations` の順
+   - 新規 DB: `CREATE TABLE` で全カラム、`migrate_001_initial` は v1 columns 検証 + stamp、`migrate_002_add_priority` は `priority` が既に存在するので no-op
+   - 既存 v1 DB: `CREATE TABLE` no-op、`migrate_001_initial` は stamp 済みなので skip、`migrate_002_add_priority` が `ALTER TABLE` で `priority` を追加
+   - 既存 v0 (lazy-v2.10.x) DB: `CREATE TABLE` no-op、`migrate_001_initial` が v1 columns 検証 → user_version=1、続けて `migrate_002_add_priority` が `ALTER TABLE` → user_version=2
 
-4. **`tests/test_db_migrations.py` にテストを追加**
+4. **⚠️ `V1_JOBS_COLUMNS` は触らない**
+
+   絶対に `V1_JOBS_COLUMNS` に新カラムを追加してはいけません。lazy-v2.10.x ユーザーが lazy-v2.12.0+ へ直接アップグレードした際に migration 001 が "missing column" で失敗し、migration 002 に到達できなくなります。
+
+   各 migration は **自身が追加する列の責任** だけを持ち、過去の migration は変更しません。「最新スキーマ全体の検証」が必要なら migration 002 以降の中で別途行ってください。
+
+5. **`tests/test_db_migrations.py` にテストを追加**
    - 新規 DB が user_version=2 で stamp される
-   - pre-v2 DB（priority カラムなし）が migration 002 を経て user_version=2 になり、既存行の priority が default 0 になる
+   - 既存 v1 DB が migration 002 を経て user_version=2 になり、既存行の priority が default 0 になる (`ALTER TABLE ... DEFAULT` の挙動確認)
+   - **直接アップグレードテスト (必須)**: lazy-v2.10.x 相当の v0 DB (V1_JOBS_COLUMNS のみ、priority なし) を作成し、JobStore を起動 → `user_version=2` になり、既存行が残り、`priority` 列が default 0 で追加されることを確認。これは migration 001 / 002 のチェーンが直列に動く保証です
    - rollback テストは不要（backward migration はサポートしない）
-
-5. **`EXPECTED_JOBS_COLUMNS` を更新**
-   - 新カラムも required に含める
-   - migration 001 はそのまま動き続ける（priority カラムも EXPECTED に含まれるので extra 扱いされない）
 
 ## 手動検証
 
