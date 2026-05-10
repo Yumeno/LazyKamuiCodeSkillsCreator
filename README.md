@@ -178,6 +178,34 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:54321/api/worker/shutdown"
 
 詳細・代替手段（idle timeout を待つ）は [📖 Worker version handshake](docs/version-handshake.md) を参照。
 
+### ⚠️ 既存 clone を持っている方への重要なお知らせ (2026-05-10 history rewrite)
+
+`lazy-v2.11.0` リリース直前 (2026-05-10) に **`git filter-repo` による history rewrite を実施**しました。リポジトリに誤って commit されていた生成済みスキル群 (`.claude/skills/{t2i,i2i,t2v,i2v,r2i,r2v,file-upload}-*` 計 92 ディレクトリ / 約 16MB) を全 history から完全削除しています ([Issue #69](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/issues/69))。
+
+**影響:** `main` および `lazy-v*` 全 23 tag の commit hash が変わりました。
+
+**既存 clone をお持ちの方の対応:**
+
+```bash
+# 推奨: fresh clone
+cd ..
+mv LazyKamuiCodeSkillsCreator LazyKamuiCodeSkillsCreator-old-backup   # 念のため退避
+git clone https://github.com/Yumeno/LazyKamuiCodeSkillsCreator.git
+```
+
+または `git pull` の代わりに hard reset:
+
+```bash
+cd LazyKamuiCodeSkillsCreator
+git fetch origin --prune
+git fetch origin --tags --force --prune --prune-tags
+git reset --hard origin/main
+```
+
+> **注意:** `.gitignore` 対象 (`.claude/queue/`, `.claude/settings.local.json`, `.claude/worktrees/` など) の **ローカル独自データは保持されます**。`git reset --hard` は tracked file のみ更新します。
+
+なお、生成済みスキル (`.claude/skills/t2i-*` 等) は **エンドユーザーの環境で `generate_skill.py` を実行して各自生成するもの** であり、リポジトリで配布する性質のものではありません。今後は `.gitignore` と CI guard で再混入を防止しています。
+
 ### 方法B: git clone（開発者向け）
 
 ```bash

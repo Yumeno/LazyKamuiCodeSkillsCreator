@@ -79,6 +79,15 @@
 - **lazy-v2.11.0 dashboard と pre-v2.11 worker の組み合わせ**: 新 dashboard は `cfg.category.limits` 不在 + `/api/version` 404 を検出すると Settings パネルに **graceful degrade banner** を表示し、復旧手順 (`curl -X POST .../api/worker/shutdown`) を案内します。jobs list / stats / endpoint table は引き続き機能するので「ダッシュボードが完全に死ぬ」状態にはなりません。
 - **`--port 0` で実ポートを別プロセスから知りたい場合**: stdout の最初の出力が `PORT=NNNNN` 形式 (machine-parseable) になっています。`grep -oP 'PORT=\K\d+'` (bash) や `Select-String` (PowerShell) で取得できます。
 
+### Repository (history rewrite)
+- **2026-05-10: `git filter-repo` による history rewrite を実施** ([Issue #69](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/issues/69))
+  - 削除対象: 誤って commit されていた生成済みスキル群 `.claude/skills/{t2i,i2i,t2v,i2v,r2i,r2v,file-upload}-*` (92 ディレクトリ / 1,104 ファイル / 約 16MB)
+  - 影響: `main` および `lazy-v*` 全 23 tag の commit hash が変化 (うち `lazy-v2.0.0`〜`lazy-v2.2.1` の 8 tag は tree 内容は同じだが filter-repo の標準挙動として commit object が再生成され hash 変化)
+  - 残骸防止: `.gitignore` に generated skills パターン追加 + `.github/workflows/no-generated-skills.yml` で CI guard
+  - **既存 clone を持っている方は再 clone または `git reset --hard origin/main` が必要** (詳細手順は README の「⚠️ 既存 clone を持っている方への重要なお知らせ」を参照)
+  - 5 個の merged feat/* branch (`feat/custom-groups`, `feat/dashboard-groups`, `feat/db-migration-foundation`, `feat/per-category-limits`, `feat/worker-version-handshake`) は削除済み (内容はすべて main に統合済み)
+  - 既知の制限: GitHub 内部の `refs/pull/64〜68/head` には rewrite 前の tip commit が残存。通常 clone からは到達不可、明示 fetch でのみ visible (詳細: Issue #69 クロージングコメント)
+
 ## [lazy-v2.10.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.10.0) (2026-04-23)
 
 ### Fixed
