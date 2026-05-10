@@ -238,5 +238,97 @@ class TestRunJob429Handling(unittest.TestCase):
         self.assertIn("something broke", updated["error"])
 
 
+class TestUnknownCategoryEndpointDispatch(unittest.TestCase):
+    """An endpoint whose URL doesn't carry a recognised category prefix
+    (i.e. ``extract_category()`` returns None) must still be dispatchable
+    — the limiter is bypassed entirely for category-less endpoints.
+
+    This pins down the dispatcher contract that PR #59's CategoryLimiter
+    relies on: ``can_submit(None) == True`` plus ``acquire_inflight(None)
+    == False`` together mean "let the dispatcher schedule this job, but
+    don't create category-level inflight state for it". Without this
+    test, a future change that makes ``can_submit(None)`` return False
+    (or that mistakenly funnels None through the category accounting
+    path) could silently strand category-less jobs in pending forever.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.store = JobStore(self.tmp.name)
+        self.config = QueueConfig()
+        self.executed: list[str] = []
+
+    def tearDown(self):
+        self.store.close()
+        os.unlink(self.tmp.name)
+
+    def _make_dispatcher_recording(self):
+        def recording_executor(job):
+            self.executed.append(job["id"])
+
+        return Dispatcher(
+            store=self.store,
+            config=self.config,
+            job_executor=recording_executor,
+            loop_interval=0.01,
+        )
+
+    def test_category_less_endpoint_gets_dispatched(self):
+        """A pending job on an endpoint with no t2i/i2i/t2v/i2v prefix
+        must transition out of pending in a single dispatch round."""
+        dispatcher = self._make_dispatcher_recording()
+
+        # Sanity: this URL has no recognised category prefix
+        endpoint = "https://example.com/some/random/path"
+        self.assertIsNone(
+            dispatcher.category_limiter.extract_category(endpoint),
+            "Test premise: endpoint must have no recognised category",
+        )
+
+        job_id = self.store.insert_job(
+            endpoint=endpoint,
+            submit_tool="submit",
+            args="{}",
+        )
+
+        # One dispatch round should pick it up.
+        dispatched = dispatcher.dispatch_once()
+
+        self.assertEqual(dispatched, 1,
+                         "Category-less endpoint must be dispatchable")
+        # And the executor should eventually run (give the thread pool a moment)
+        for _ in range(50):
+            if self.executed:
+                break
+            time.sleep(0.02)
+        self.assertEqual(self.executed, [job_id])
+
+        dispatcher.stop()
+
+    def test_category_less_endpoint_creates_no_category_inflight_state(self):
+        """Dispatching a category-less endpoint must not leave any
+        per-category inflight state behind. Only acquire_inflight(None)
+        is called, which returns False without touching the dict."""
+        dispatcher = self._make_dispatcher_recording()
+        endpoint = "https://example.com/some/random/path"
+
+        job_id = self.store.insert_job(
+            endpoint=endpoint, submit_tool="submit", args="{}",
+        )
+        dispatcher.dispatch_once()
+
+        # Wait for the executor to finish
+        for _ in range(50):
+            if self.executed:
+                break
+            time.sleep(0.02)
+
+        # No category accounting created
+        self.assertEqual(dispatcher.category_limiter._inflight, {})
+
+        dispatcher.stop()
+
+
 if __name__ == "__main__":
     unittest.main()
