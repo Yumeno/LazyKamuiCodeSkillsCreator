@@ -26,8 +26,10 @@ class TestInitSchema(unittest.TestCase):
 
     def test_create_tables_idempotent(self):
         store = db.JobStore(":memory:")
-        # calling init again should not raise
-        store._init_schema()
+        # calling init again should not raise — both the
+        # ``CREATE TABLE IF NOT EXISTS`` and the migration runner are
+        # designed to be safe to re-invoke on an already-initialised DB.
+        store._init_schema_and_migrations()
 
 
 class TestInsertJob(unittest.TestCase):
