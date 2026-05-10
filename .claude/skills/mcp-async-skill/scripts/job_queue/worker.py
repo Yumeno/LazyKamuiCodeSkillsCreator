@@ -158,9 +158,27 @@ class _RequestHandler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/api/config":
+            # New schema: cat_cfg = {"limits": {"t2i": {...}, ...}}
             cat_cfg = app.dispatcher.category_limiter.get_config()
+
+            # v3 fix #8: include legacy compatibility keys at the top level of
+            # the `category` object so lazy-v2.10.x dashboard's read path
+            # (`cfg.category.max_inflight` etc.) keeps showing reasonable
+            # values instead of going blank. The first category's value is
+            # used. These keys will be removed in lazy-v2.13.0 or later.
+            limits = cat_cfg.get("limits", {})
+            first_cat_key = next(iter(sorted(limits.keys())), None)
+            legacy_compat = {}
+            if first_cat_key is not None:
+                first_cat = limits[first_cat_key]
+                legacy_compat = {
+                    "max_inflight": first_cat.get("max_inflight"),
+                    "min_interval": first_cat.get("min_interval"),
+                    "exhaust_cooldown": first_cat.get("exhaust_cooldown"),
+                }
+
             self._send_json(200, {
-                "category": cat_cfg,
+                "category": {**cat_cfg, **legacy_compat},
                 "endpoint": {
                     "default_max_concurrent": app.dispatcher.config.default_max_concurrent,
                     "default_min_interval": app.dispatcher.config.default_min_interval,
@@ -351,23 +369,88 @@ class _RequestHandler(BaseHTTPRequestHandler):
             requires_restart = []
             limiter = app.dispatcher.category_limiter
 
-            # Category settings
+            # Category settings — three accepted shapes:
+            #   1. New per-category form (preferred):
+            #      {"category": {"limits": {"t2v": {"max_inflight": 1, ...}}}}
+            #   2. Legacy flat form (lazy-v2.10.x compat — apply to ALL categories):
+            #      {"category": {"max_inflight": 1, "exhaust_cooldown": 1800}}
+            #   3. Both — new form takes precedence per category, legacy form
+            #      fills in any category not covered by `limits`.
             cat = body.get("category", {})
-            for key, setter, vtype, vmin in [
+
+            _CAT_KEY_SPEC = [
                 ("max_inflight", limiter.set_max_inflight, int, 1),
                 ("min_interval", limiter.set_min_interval, float, 0),
                 ("exhaust_cooldown", limiter.set_exhaust_cooldown, float, 0),
-            ]:
-                if key in cat:
+            ]
+
+            # ---- New form: category.limits.{cat}.{key} ----
+            # v3 fix M1: distinguish "key absent" from "explicit null".
+            # An explicit null (or any non-dict) is rejected — silently
+            # ignoring it could mask a config typo.
+            limits_block = None
+            if "limits" in cat:
+                limits_block = cat["limits"]
+                if not isinstance(limits_block, dict):
+                    rejected["category.limits"] = (
+                        f"must be object (got {type(limits_block).__name__})"
+                    )
+                    limits_block = None
+
+            covered_categories: set[str] = set()
+            if limits_block is not None:
+                for cat_name, overrides in limits_block.items():
+                    if not isinstance(overrides, dict):
+                        rejected[f"category.limits.{cat_name}"] = "must be object"
+                        continue
+                    if not limiter.is_known_category(cat_name):
+                        rejected[f"category.limits.{cat_name}"] = "unknown category"
+                        continue
+                    covered_categories.add(cat_name)
+                    for key, setter, vtype, vmin in _CAT_KEY_SPEC:
+                        if key not in overrides:
+                            continue
+                        v = overrides[key]
+                        try:
+                            v = vtype(v)
+                            if v < vmin:
+                                raise ValueError
+                            setter(cat_name, v)
+                            applied[f"category.limits.{cat_name}.{key}"] = v
+                        except (ValueError, TypeError):
+                            rejected[f"category.limits.{cat_name}.{key}"] = (
+                                f"must be {vtype.__name__} >= {vmin}"
+                            )
+
+            # ---- Legacy flat form: apply to all configured categories ----
+            # v3 fix #8: a legacy PATCH from a lazy-v2.10.x dashboard updates
+            # ALL categories at once. Any category already covered by the new
+            # `limits` block in the same request is skipped (new form wins).
+            legacy_keys_present = [k for (k, _, _, _) in _CAT_KEY_SPEC if k in cat]
+            if legacy_keys_present:
+                applied["_legacy_warning"] = (
+                    "Received legacy flat category.{key} form; applied to all "
+                    "categories not covered by category.limits in this request. "
+                    "Migrate to category.limits.{cat}.{key} per-category form."
+                )
+                for key, setter, vtype, vmin in _CAT_KEY_SPEC:
+                    if key not in cat:
+                        continue
                     v = cat[key]
                     try:
                         v = vtype(v)
                         if v < vmin:
                             raise ValueError
-                        setter(v)
-                        applied[f"category.{key}"] = v
                     except (ValueError, TypeError):
                         rejected[f"category.{key}"] = f"must be {vtype.__name__} >= {vmin}"
+                        continue
+                    affected = []
+                    for cat_name in limiter.get_categories():
+                        if cat_name in covered_categories:
+                            continue
+                        setter(cat_name, v)
+                        affected.append(cat_name)
+                    applied[f"category.{key}"] = {"value": v, "affected": affected}
 
             # Endpoint defaults
             ep = body.get("endpoint", {})

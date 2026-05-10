@@ -981,7 +981,18 @@ def detect_id_param_name(tools: list[dict]) -> str:
 
 
 def generate_queue_config(endpoint: str) -> dict:
-    """Generate a default queue_config.json for the given endpoint."""
+    """Generate a default queue_config.json for the given endpoint.
+
+    Uses the lazy-v2.11.0 per-category schema: each of t2i/i2i/t2v/i2v has
+    its own ``max_inflight``, ``min_interval``, and ``exhaust_cooldown``.
+    Adjust these per category to match the upstream service's per-category
+    rate limits.
+    """
+    per_cat_default = {
+        "max_inflight": 1,
+        "min_interval": 1.0,
+        "exhaust_cooldown": 3600,
+    }
     return {
         "host": "127.0.0.1",
         "port": 54321,
@@ -999,9 +1010,12 @@ def generate_queue_config(endpoint: str) -> dict:
         "category_rate_limits": {
             "categories": ["t2i", "i2i", "t2v", "i2v"],
             "aliases": {"r2i": "i2i", "r2v": "i2v"},
-            "min_interval": 1.0,
-            "max_category_inflight": 1,
-            "exhaust_cooldown": 3600,
+            "limits": {
+                "t2i": dict(per_cat_default),
+                "i2i": dict(per_cat_default),
+                "t2v": dict(per_cat_default),
+                "i2v": dict(per_cat_default),
+            },
         },
     }
 

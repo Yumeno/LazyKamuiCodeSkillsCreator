@@ -303,10 +303,12 @@ class Dispatcher:
                 if category:
                     self.category_limiter.force_cooldown(category)
                     self.category_limiter.record_429(category)
-                # Always set endpoint-level cooldown (covers unknown categories)
+                # Always set endpoint-level cooldown (covers unknown categories).
+                # v3 fix M3: use the public per-category getter — for unknown
+                # categories this returns the hardcoded default cooldown.
                 self.pause_endpoint(
                     job["endpoint"],
-                    self.category_limiter._exhaust_cooldown,
+                    self.category_limiter.get_exhaust_cooldown(category),
                 )
                 self.store.update_status(
                     job["id"], "pending",
