@@ -15,5 +15,15 @@
       "max_concurrent_jobs": 5,
       "min_interval_seconds": 0.5
     }
+  },
+  "category_rate_limits": {
+    "categories": ["t2i", "i2i", "t2v", "i2v"],
+    "aliases": {"r2i": "i2i", "r2v": "i2v"},
+    "limits": {
+      "t2i": {"max_inflight": 3, "min_interval": 1.0, "exhaust_cooldown": 600},
+      "i2i": {"max_inflight": 2, "min_interval": 1.0, "exhaust_cooldown": 3600},
+      "t2v": {"max_inflight": 1, "min_interval": 1.0, "exhaust_cooldown": 1800},
+      "i2v": {"max_inflight": 1, "min_interval": 1.0, "exhaust_cooldown": 3600}
+    }
   }
 }

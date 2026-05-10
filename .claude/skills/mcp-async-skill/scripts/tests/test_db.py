@@ -462,6 +462,92 @@ class TestPurgeOldJobs(unittest.TestCase):
         self.assertIsNotNone(self.store.get_job(jid4))
 
 
+class TestLegacyTimestampCompat(unittest.TestCase):
+    """Pre-95ebebb DB rows used SQL-side ``strftime('%Y-%m-%dT%H:%M:%f', 'now')``
+    which produces NO trailing ``Z``. Post-95ebebb rows go through Python's
+    ``_utc_now_iso()`` and DO carry ``Z``. ``purge_old_jobs`` and
+    ``get_stale_polling`` must accept BOTH formats so that a worker that
+    upgrades over an existing DB doesn't suddenly start failing to purge
+    or detect stale jobs on its old rows.
+
+    Regression context: ``purge_old_jobs`` previously mixed
+    ``julianday('now')`` (second precision) with Python's
+    microsecond-precision timestamps, and ``get_stale_polling`` used
+    ``REPLACE(updated_at, 'Z', '')`` to strip the suffix. PR #59
+    rewrote both to pass the Python-side ``_utc_now_iso()`` as a bind
+    parameter. SQLite's ``julianday`` itself accepts the ``Z`` form
+    natively, so legacy rows without the suffix continue to parse too.
+    These tests pin both shapes down explicitly.
+    """
+
+    def setUp(self):
+        self.store = db.JobStore(":memory:")
+
+    def _insert_with_raw_updated_at(self, jid: str, status: str,
+                                    updated_at: str):
+        """Force a specific updated_at value into the DB, simulating a
+        row written by an older worker version."""
+        with self.store._lock:
+            self.store.conn.execute(
+                "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
+                (status, updated_at, jid),
+            )
+            self.store.conn.commit()
+
+    def test_purge_handles_legacy_no_z_timestamp(self):
+        """A legacy row without a Z suffix must still be purged when its
+        age exceeds retention_seconds."""
+        jid = self.store.insert_job(
+            endpoint="http://a:8000", submit_tool="g", args="{}",
+        )
+        # Pre-95ebebb shape: no Z, written by SQL strftime
+        self._insert_with_raw_updated_at(jid, "completed",
+                                         "2020-01-01T00:00:00.000")
+
+        count = self.store.purge_old_jobs(retention_seconds=60)
+        self.assertEqual(count, 1)
+        self.assertIsNone(self.store.get_job(jid))
+
+    def test_purge_handles_post_95ebebb_z_timestamp(self):
+        """A modern row WITH a Z suffix must also be purged when old."""
+        jid = self.store.insert_job(
+            endpoint="http://a:8000", submit_tool="g", args="{}",
+        )
+        # Post-95ebebb shape: trailing Z
+        self._insert_with_raw_updated_at(jid, "completed",
+                                         "2020-01-01T00:00:00.000000Z")
+
+        count = self.store.purge_old_jobs(retention_seconds=60)
+        self.assertEqual(count, 1)
+        self.assertIsNone(self.store.get_job(jid))
+
+    def test_get_stale_polling_handles_legacy_no_z_timestamp(self):
+        """A polling row with a legacy (no-Z) updated_at must still be
+        flagged stale once its age exceeds the timeout."""
+        jid = self.store.insert_job(
+            endpoint="http://a:8000", submit_tool="g", args="{}",
+        )
+        self._insert_with_raw_updated_at(jid, "polling",
+                                         "2020-01-01T00:00:00.000")
+
+        stale = self.store.get_stale_polling(timeout_seconds=60)
+        self.assertEqual(len(stale), 1)
+        self.assertEqual(stale[0]["id"], jid)
+
+    def test_get_stale_polling_handles_post_95ebebb_z_timestamp(self):
+        """A polling row with a Z-suffixed updated_at must also be
+        flagged stale once its age exceeds the timeout."""
+        jid = self.store.insert_job(
+            endpoint="http://a:8000", submit_tool="g", args="{}",
+        )
+        self._insert_with_raw_updated_at(jid, "polling",
+                                         "2020-01-01T00:00:00.000000Z")
+
+        stale = self.store.get_stale_polling(timeout_seconds=60)
+        self.assertEqual(len(stale), 1)
+        self.assertEqual(stale[0]["id"], jid)
+
+
 class TestRecoveringEndpoints(unittest.TestCase):
     """Querying recovering jobs for the dispatcher."""
 

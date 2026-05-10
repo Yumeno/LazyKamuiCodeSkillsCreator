@@ -23,7 +23,8 @@ Claude Code用のMCPスキルジェネレーター。非同期ジョブパター
 | **複数ファイル対応** | レスポンス内の全URLを再帰探索し一括ダウンロード。連番サフィックス自動付与 | 自動 | [📖](docs/output-path-strategy.md) |
 | **キューシステム** | ローカルワーカーによるエンドポイント別レートリミットと並行数制御。自動起動・自動終了 | `--queue-config` | [📖](docs/queue_system_design.md) |
 | **キュー堅牢化** | ゾンビジョブ回復・指数バックオフリトライ・429 Retry-After対応・ワーカー側ダウンロード | 自動 | [📖](docs/queue_system_hardening.md) |
-| **カテゴリ別制御** | t2i/i2i/t2v/i2vカテゴリ単位でのinflight制御・429自動リトライ・非429エラー時のカテゴリ即pause | 自動 | |
+| **カテゴリ別制御** | t2i/i2i/t2v/i2vカテゴリ単位でのinflight制御・429自動リトライ・非429エラー時のカテゴリ即pause | 自動 | [📖](docs/category-limits.md) |
+| **per-category 個別レートリミット** | 各カテゴリに独立した max_inflight / min_interval / exhaust_cooldown を設定可能 (`limits.{cat}.{key}`)。サービス側のカテゴリ別レートリミットに合わせて調整 | `queue_config.json` | [📖](docs/category-limits.md) |
 | **セッション管理** | MCPセッションをendpoint単位でキャッシュ。認証サーバーへの負荷を削減 | 自動 | |
 | **カテゴリpause/resume** | カテゴリ単位での手動一時停止・再開。他端末との枠共有時に便利 | `--pause-category` | |
 | **Queue Dashboard** | ブラウザから見えるキュー可視化Web UI。サマリー/カテゴリ/ジョブ一覧/失敗詳細/pause-resume。追加依存なし（Python stdlib + Vanilla JS） | 独立スキル | |
@@ -537,17 +538,19 @@ python mcp_async_call.py --resume-category t2i
   "category_rate_limits": {
     "categories": ["t2i", "i2i", "t2v", "i2v"],
     "aliases": {"r2i": "i2i", "r2v": "i2v"},
-    "min_interval": 1.0,
-    "max_category_inflight": 1,
-    "exhaust_cooldown": 3600,
-    "auto_pause_after_consecutive_429": 25
+    "limits": {
+      "t2i": {"max_inflight": 3, "min_interval": 1.0, "exhaust_cooldown": 600},
+      "i2i": {"max_inflight": 2, "min_interval": 1.0, "exhaust_cooldown": 3600},
+      "t2v": {"max_inflight": 1, "min_interval": 1.0, "exhaust_cooldown": 1800},
+      "i2v": {"max_inflight": 1, "min_interval": 1.0, "exhaust_cooldown": 3600}
+    }
   },
   "job_retention_seconds": 86400,
   "results_dir": ".claude/queue/results"
 }
 ```
 
-> 📖 詳細: [キューシステム設計](docs/queue_system_design.md) / [堅牢化設計](docs/queue_system_hardening.md)
+> 📖 詳細: [キューシステム設計](docs/queue_system_design.md) / [堅牢化設計](docs/queue_system_hardening.md) / [カテゴリ別レートリミット (per-category limits)](docs/category-limits.md)
 
 ## エラーハンドリング
 
