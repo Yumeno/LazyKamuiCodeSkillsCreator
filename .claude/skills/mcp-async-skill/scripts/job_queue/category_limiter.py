@@ -264,16 +264,22 @@ class CategoryLimiter(LimiterStateMixin):
             if self._inflight.get(category, 0) >= max_inflight:
                 return False
 
-            # Cooldown check (429 rolling window) — uses mixin helper
+            # Cooldown check (429 rolling window) — uses mixin helper.
+            # Capture whether a cooldown was active BEFORE the helper
+            # call so we can log exactly once on the transition from
+            # active → expired. Without the snapshot the condition
+            # ``category not in self._exhaust_time`` would be true on
+            # every call after the cooldown wore off, flooding the log
+            # until something else (e.g. record_success) cleared
+            # `_consecutive_429`.
             cooldown = self._exhaust_cooldown.get(
                 category, HARDCODED_DEFAULT_EXHAUST_COOLDOWN
             )
+            had_active_cooldown = category in self._exhaust_time
             if not self._check_cooldown_locked(category, cooldown, now):
                 return False
-            # If the cooldown just expired the helper logged nothing; preserve
-            # the legacy info-log here for parity with previous behaviour.
-            if category not in self._exhaust_time and self._consecutive_429.get(category, 0) > 0:
-                # The cooldown was active and just expired; surface that fact.
+            if had_active_cooldown and category not in self._exhaust_time:
+                # The cooldown was active up to this call and just expired.
                 logger.info(
                     "[CategoryLimiter] Cooldown expired for %s, resuming", category,
                 )
@@ -283,10 +289,15 @@ class CategoryLimiter(LimiterStateMixin):
     def touch_submit(self, category: str | None):
         """Update last-submit timestamp (for min_interval enforcement).
 
-        Overrides the mixin to keep the legacy-vs-new key acceptance
-        behaviour: unknown keys are silently ignored at the mixin level
-        already, but we still want to no-op for ``None``.
+        Overrides the mixin to enforce the "unknown keys create no
+        state" contract that ``can_submit`` / ``acquire_inflight`` /
+        ``release_inflight`` already follow. Without this guard the
+        mixin would happily insert an entry into ``_last_submit`` for
+        an arbitrary string, growing the dict unboundedly if a caller
+        ever mistakenly fed it raw endpoint URLs.
         """
+        if category is None or category not in self._categories:
+            return
         super().touch_submit(category)
 
     def record_success(self, category: str | None):
