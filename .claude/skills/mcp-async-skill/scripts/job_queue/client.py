@@ -13,13 +13,40 @@ import time
 
 import requests
 
-from job_queue import DEFAULT_MAX_POLLS
+from job_queue import DEFAULT_MAX_POLLS, __version__ as CLIENT_VERSION
+from job_queue.versioning import (
+    get_worker_version,
+    warn_if_version_mismatch,
+)
+
+
+def _check_worker_version(response) -> None:
+    """Inspect a worker response for the X-Worker-Version header and warn
+    on mismatch. (PR2 / #62.)
+
+    The actual warning fires at most once per process via the one-shot
+    guard inside ``versioning.warn_if_version_mismatch``.
+    """
+    if response is None:
+        return
+    headers = getattr(response, "headers", None)
+    worker_v = get_worker_version(headers)
+    warn_if_version_mismatch(worker_v, CLIENT_VERSION)
 
 
 def is_worker_running(worker_url: str) -> bool:
-    """Check if the worker is reachable."""
+    """Check if the worker is reachable.
+
+    Also pipes the response through ``_check_worker_version`` so the
+    health-probe path that runs at every CLI invocation gets the same
+    stale-worker warning treatment as job-submission paths. Without
+    this, the most common entry point (``_ensure_worker_running``)
+    would silently miss the version skew until the user submitted a
+    job.
+    """
     try:
         resp = requests.get(f"{worker_url}/api/health", timeout=2)
+        _check_worker_version(resp)
         return resp.status_code == 200
     except (requests.ConnectionError, requests.Timeout):
         return False
@@ -89,6 +116,7 @@ def submit_job(
         payload["rate_limits"] = rate_limits
 
     resp = requests.post(f"{worker_url}/api/jobs", json=payload, timeout=10)
+    _check_worker_version(resp)
     resp.raise_for_status()
     return resp.json()
 
@@ -96,6 +124,7 @@ def submit_job(
 def wait_job(worker_url: str, job_id: str) -> dict:
     """Query a job's current status once. Returns the job state."""
     resp = requests.get(f"{worker_url}/api/jobs/{job_id}", timeout=10)
+    _check_worker_version(resp)
     return resp.json()
 
 

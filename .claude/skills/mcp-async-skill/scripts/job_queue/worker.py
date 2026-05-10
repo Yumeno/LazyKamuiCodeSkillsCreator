@@ -17,6 +17,7 @@ from typing import Callable
 logger = logging.getLogger(__name__)
 
 from . import db
+from . import __version__ as WORKER_VERSION
 from .dispatcher import Dispatcher, QueueConfig
 
 
@@ -72,6 +73,11 @@ class _RequestHandler(BaseHTTPRequestHandler):
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        # PR2 (#62): every response advertises its worker version so the
+        # client can detect "stale worker after overwrite-install" skew.
+        # Attached on success AND error responses (4xx / 5xx); the client
+        # may receive a 404 first and still need to learn the version.
+        self.send_header("X-Worker-Version", WORKER_VERSION)
         self.end_headers()
         self.wfile.write(body)
 
@@ -90,6 +96,19 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 "status": "ok",
                 "active_jobs": app.store.count_all_active_jobs(),
                 "pending_jobs": app.store.count_all_pending_jobs(),
+            })
+            return
+
+        if self.path == "/api/version":
+            # PR2 (#62): expose the worker version + the set of client
+            # versions the worker considers compatible. The list lets a
+            # future client (post-Phase 1) downgrade the mismatch
+            # warning to a debug log when its own version is in this
+            # set. Phase 1 keeps it at "exact match only".
+            self._send_json(200, {
+                "version": WORKER_VERSION,
+                "api_compatible_versions": [WORKER_VERSION],
+                "server_time_utc": _utc_now_iso(),
             })
             return
 
