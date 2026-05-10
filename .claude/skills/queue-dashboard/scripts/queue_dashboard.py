@@ -46,17 +46,31 @@ MAX_REQUEST_BODY = 1 * 1024 * 1024  # 1 MiB
 STATIC_DIR = Path(__file__).parent / "static"
 
 # ---- Whitelist of proxied API paths (to worker) ----------------------------
+# PR5 (#61) additions:
+#   GET    /api/version          — worker version handshake (PR2 / #62)
+#   GET    /api/groups           — custom_groups runtime state (PR4 / #60)
+#   POST   /api/groups/{name}/{pause|resume}
+#                                — group pause toggle. The {name} segment is
+#                                  user-defined config so we accept any
+#                                  reasonable token (alnum + - + _ + .)
+#                                  rather than a closed enum. Worker side
+#                                  rejects unknown groups with 404, so a
+#                                  bogus name reaches the user as a clear
+#                                  "available_groups" response.
 ALLOWED_GET = [
     re.compile(r"^/api/health$"),
     re.compile(r"^/api/stats$"),
     re.compile(r"^/api/categories$"),
+    re.compile(r"^/api/groups$"),
     re.compile(r"^/api/config$"),
+    re.compile(r"^/api/version$"),
     re.compile(r"^/api/worker/status$"),
     re.compile(r"^/api/jobs(\?.*)?$"),
     re.compile(r"^/api/jobs/[A-Za-z0-9_\-]+(\?.*)?$"),
 ]
 ALLOWED_POST = [
     re.compile(r"^/api/categories/(t2i|i2i|t2v|i2v|r2i|r2v)/(pause|resume)$"),
+    re.compile(r"^/api/groups/[A-Za-z0-9_\-.]+/(pause|resume)$"),
     re.compile(r"^/api/endpoints/resume$"),
     re.compile(r"^/api/worker/shutdown$"),
 ]
@@ -356,8 +370,16 @@ class ThreadingDashboardServer(socketserver.ThreadingMixIn, http.server.HTTPServ
 
 def main():
     parser = argparse.ArgumentParser(description="Queue dashboard web UI")
-    parser.add_argument("--port", type=int, default=DEFAULT_DASHBOARD_PORT,
-                        help=f"Dashboard HTTP port (default: {DEFAULT_DASHBOARD_PORT})")
+    parser.add_argument(
+        "--port", type=int, default=DEFAULT_DASHBOARD_PORT,
+        help=(
+            f"Dashboard HTTP port (default: {DEFAULT_DASHBOARD_PORT}). "
+            f"Pass 0 to let the OS allocate a free port — useful when the "
+            f"default conflicts with another local service. The actual port "
+            f"is printed to stdout in a 'PORT=NNNNN' line so callers can "
+            f"parse it programmatically."
+        ),
+    )
     parser.add_argument("--worker-url", default=DEFAULT_WORKER_URL,
                         help=f"Worker API base URL (default: {DEFAULT_WORKER_URL})")
     parser.add_argument("--no-open", action="store_true",
@@ -374,13 +396,21 @@ def main():
     DashboardHandler.worker_url = args.worker_url.rstrip("/")
     DashboardHandler.project_root = project_root
 
-    url = f"http://{args.host}:{args.port}/"
     try:
         with ThreadingDashboardServer((args.host, args.port), DashboardHandler) as httpd:
+            # PR5 (#53): when --port 0 is passed, the OS picks a free port.
+            # Surface the actual port so a caller (humans reading stdout, or
+            # a parent process parsing it) knows where to point a browser.
+            actual_port = httpd.server_address[1]
+            url = f"http://{args.host}:{actual_port}/"
+            # Machine-parseable line first, in a stable shape so a
+            # subprocess driver can grep for it.
+            print(f"PORT={actual_port}")
             print(f"[Queue Dashboard] {url}")
             print(f"[Queue Dashboard] Worker API: {DashboardHandler.worker_url}")
             print(f"[Queue Dashboard] Project root: {project_root}")
             print("  Ctrl+C to stop")
+            sys.stdout.flush()
             if not args.no_open:
                 try:
                     webbrowser.open(url)

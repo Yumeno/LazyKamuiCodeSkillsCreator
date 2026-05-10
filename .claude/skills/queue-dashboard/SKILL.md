@@ -12,8 +12,9 @@ Browser-based dashboard for the MCP job queue, built with Python stdlib + Vanill
 - Monitoring queue status in real time
 - Inspecting pending / running / completed / failed jobs at a glance
 - Debugging failed jobs (view full error details with args)
-- Pausing / resuming categories (t2i / i2i / t2v / i2v)
-- Confirming that rate limiting is behaving as expected
+- Pausing / resuming categories (t2i / i2i / t2v / i2v) AND custom groups
+- Confirming that per-category and per-group rate limiting is behaving as expected
+- Tuning per-category and per-group limits (`max_inflight`, `min_interval`, `exhaust_cooldown`) at runtime via the Settings panel
 
 ## How to Start
 
@@ -26,15 +27,35 @@ python .claude/skills/queue-dashboard/scripts/queue_dashboard.py
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--port` | 54322 | Dashboard HTTP port |
+| `--port` | 54322 | Dashboard HTTP port. **Pass `0` to let the OS pick a free port** when the default conflicts with another service. The actual port is printed on stdout as `PORT=NNNNN` (machine-parseable) followed by the human-readable URL. |
 | `--worker-url` | `http://127.0.0.1:54321` | Worker API base URL |
 | `--no-open` | false | Do not auto-open the browser |
 | `--host` | 127.0.0.1 | Bind address (external binding requires explicit change) |
+
+#### Example: dynamic port allocation
+
+```bash
+$ python .claude/skills/queue-dashboard/scripts/queue_dashboard.py --port 0 --no-open
+PORT=49152
+[Queue Dashboard] http://127.0.0.1:49152/
+[Queue Dashboard] Worker API: http://127.0.0.1:54321
+[Queue Dashboard] Project root: ...
+  Ctrl+C to stop
+```
+
+A subprocess driver can grep for `^PORT=` in stdout to discover where the dashboard bound.
 
 ## Features
 
 - **Summary cards**: pending / running / completed / failed counts
 - **Category cards**: inflight, cooldown remaining, consecutive 429s, pause reason, pause/resume buttons
+- **Custom Groups cards** *(lazy-v2.11.0+)*: same shape as Category cards, side-by-side in a two-column layout. Shows the matched endpoint patterns inline so you can confirm WHICH group is throttling a given URL. Pause/resume routes through `POST /api/groups/{name}/{action}`.
+- **Settings panel** *(lazy-v2.11.0+)*:
+  - **Per-category limits grid** — one row per t2i/i2i/t2v/i2v with `max_inflight` / `min_interval` / `exhaust_cooldown` inputs. Replaces the pre-PR1 single trio of inputs.
+  - **Custom Groups limits grid** — one row per configured group. Group names are shown with the matched endpoint patterns as a tooltip.
+  - Endpoint defaults + Worker idle timeout (unchanged from earlier versions).
+- **Worker version label**: header shows whatever `/api/version` returned (PR2). Falls back to `(pre-v2.11.0)` when the worker pre-dates the version handshake endpoint.
+- **Compatibility banner** *(lazy-v2.11.0+)*: when the worker is too old (no `cfg.category.limits`), the Settings panel shows a graceful-degrade banner with the exact `curl` to recover. The jobs list and stats continue to function.
 - **Endpoint statistics table**: per-endpoint job counts
 - **Recent jobs list**: status badges, filter by status, click-to-detail modal
 - **Job detail modal**: full JSON including original args and error body
@@ -53,8 +74,9 @@ Keeping the browser, static assets, and API on a single origin avoids CORS issue
 ### Security & Safety
 
 - **Path whitelist**: only known endpoints are proxied
-  - GET: `/api/health`, `/api/stats`, `/api/categories`, `/api/jobs`, `/api/jobs/{id}`
-  - POST: `/api/categories/{t2i|i2i|t2v|i2v|r2i|r2v}/{pause|resume}`
+  - GET: `/api/health`, `/api/stats`, `/api/categories`, `/api/groups`, `/api/config`, `/api/version`, `/api/worker/status`, `/api/jobs`, `/api/jobs/{id}`
+  - POST: `/api/categories/{t2i|i2i|t2v|i2v|r2i|r2v}/{pause|resume}`, `/api/groups/{name}/{pause|resume}` (group `name` accepts `[A-Za-z0-9_\-.]+`), `/api/endpoints/resume`, `/api/worker/shutdown`
+  - PATCH: `/api/config`
 - **Request body cap**: 1 MiB max
 - **Upstream timeout**: 10 seconds per proxied request
 - **Default bind**: `127.0.0.1` only (external binding requires explicit `--host`)

@@ -118,7 +118,7 @@ curl -X PATCH http://127.0.0.1:54321/api/config \
 }
 ```
 
-> **Warning**: 旧 `lazy-v2.10.x dashboard` から値編集 PATCH を投げると、新 worker は **全カテゴリに一括適用** します。最初のカテゴリの値だけを変えたつもりが全カテゴリに展開されるので注意してください。**per-category の独立編集を行うには `lazy-v2.12.0` 以降の dashboard が必要** です。
+> **Warning**: 旧 `lazy-v2.10.x dashboard` から値編集 PATCH を投げると、新 worker は **全カテゴリに一括適用** します。最初のカテゴリの値だけを変えたつもりが全カテゴリに展開されるので注意してください。**per-category の独立編集を行うには `lazy-v2.11.0` 以降の dashboard (本リリース同梱) が必要** です。
 
 ### 入力検証
 

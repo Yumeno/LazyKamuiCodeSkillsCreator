@@ -16,6 +16,7 @@
       <button id="btn-stop" class="wk-btn" hidden title="Stop worker">■ Stop</button>
       <button id="btn-restart" class="wk-btn" hidden title="Restart worker">↻ Restart</button>
     </div>
+    <span id="worker-version-info" class="worker-version" title="Worker version"></span>
     <span id="status-indicator" title="Connection status">●</span>
   </header>
 
@@ -27,11 +28,18 @@
       <h2>Settings</h2>
       <button id="panel-close" aria-label="Close">×</button>
     </div>
-    <fieldset>
-      <legend>Category Limits</legend>
-      <label>Max Inflight <input id="cfg-max-inflight" type="number" min="1" step="1"></label>
-      <label>Min Interval (s) <input id="cfg-min-interval" type="number" min="0" step="0.1"></label>
-      <label>429 Cooldown (s) <input id="cfg-cooldown" type="number" min="0" step="60"></label>
+
+    <!-- PR5 (#61) graceful-degrade banner: shown when the worker
+         predates lazy-v2.11 and `cfg.category.limits` is missing. -->
+    <div id="compat-banner" class="compat-banner" hidden></div>
+
+    <fieldset id="cat-limits-fieldset">
+      <legend>Category Limits (per-category)</legend>
+      <div id="cat-limits-grid"></div>
+    </fieldset>
+    <fieldset id="group-limits-fieldset">
+      <legend>Custom Groups</legend>
+      <div id="group-limits-grid"></div>
     </fieldset>
     <fieldset>
       <legend>Endpoint Defaults</legend>
@@ -57,9 +65,15 @@
     <div class="card"><h3>Failed</h3><div id="count-failed">-</div></div>
   </section>
 
-  <section id="categories">
-    <h2>Categories</h2>
-    <div id="category-grid"></div>
+  <section id="categories-and-groups">
+    <div id="categories">
+      <h2>Categories</h2>
+      <div id="category-grid"></div>
+    </div>
+    <div id="custom-groups">
+      <h2>Custom Groups</h2>
+      <div id="group-grid"></div>
+    </div>
   </section>
 
   <section id="skills">
