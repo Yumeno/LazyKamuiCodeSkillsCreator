@@ -30,7 +30,7 @@ Claude Code用のMCPスキルジェネレーター。非同期ジョブパター
 | **DB スキーマ migration 基盤** | `PRAGMA user_version` ベースの簡易マイグレーション。Phase 1 では足場のみ追加 (実カラム変更は将来 migration で対応) | 自動 | [📖](docs/db-migration.md) |
 | **セッション管理** | MCPセッションをendpoint単位でキャッシュ。認証サーバーへの負荷を削減 | 自動 | |
 | **カテゴリpause/resume** | カテゴリ単位での手動一時停止・再開。他端末との枠共有時に便利 | `--pause-category` | |
-| **Queue Dashboard** | ブラウザから見えるキュー可視化Web UI。サマリー/カテゴリ/ジョブ一覧/失敗詳細/pause-resume。追加依存なし（Python stdlib + Vanilla JS） | 独立スキル | |
+| **Queue Dashboard** | ブラウザから見えるキュー可視化Web UI。サマリー/カテゴリ/Custom Groups/ジョブ一覧/失敗詳細/pause-resume、per-category & per-group 設定編集、worker version 表示、graceful degrade banner、`--port 0` 動的ポート割当。追加依存なし（Python stdlib + Vanilla JS） | 独立スキル | |
 
 ### ⚠️ 実行ディレクトリについて
 
@@ -715,10 +715,20 @@ python .claude/skills/queue-dashboard/scripts/queue_dashboard.py
 **オプション:**
 | オプション | デフォルト | 説明 |
 |-----------|-----------|------|
-| `--port` | 54322 | ダッシュボードのHTTPポート |
+| `--port` | 54322 | ダッシュボードのHTTPポート。**`--port 0` で OS が空きポートを自動割当** (default の 54322 が他サービスと衝突する場合)。実ポートは stdout に `PORT=NNNNN` 形式で出力されるので subprocess で parse 可能 |
 | `--worker-url` | `http://127.0.0.1:54321` | ワーカーAPIのベースURL |
 | `--no-open` | false | ブラウザの自動オープンを抑制 |
 | `--host` | 127.0.0.1 | バインドアドレス |
+
+**`--port 0` の出力例:**
+```
+$ python .claude/skills/queue-dashboard/scripts/queue_dashboard.py --port 0 --no-open
+PORT=49152
+[Queue Dashboard] http://127.0.0.1:49152/
+[Queue Dashboard] Worker API: http://127.0.0.1:54321
+[Queue Dashboard] Project root: ...
+  Ctrl+C to stop
+```
 
 ### 画面構成
 
@@ -726,12 +736,22 @@ python .claude/skills/queue-dashboard/scripts/queue_dashboard.py
 - **Pending / Running / Completed / Failed** の合計件数をリアルタイム表示
 - 2秒ごとに自動更新（タブ非表示時は間引き、エラー時は指数バックオフ）
 
-#### カテゴリ別状態
-- t2i / i2i / t2v / i2v の各カテゴリの状態をカード表示
-- **Inflight**: 現在の同時実行数 / 上限
-- **Cooldown**: 429受信後の残りcooldown秒数
-- **Consecutive 429**: 連続429回数（情報表示のみ）
-- **Pause / Resume ボタン**: カテゴリの手動一時停止・再開
+#### カテゴリ別状態 + Custom Groups (二段組)
+**lazy-v2.11.0+** ではカテゴリと Custom Groups が左右に並ぶ二段組レイアウト（900px 以下では縦積み）。
+
+- **Categories** (左): t2i / i2i / t2v / i2v の各カテゴリの状態をカード表示
+  - **Inflight**: 現在の同時実行数 / 上限
+  - **Cooldown**: 429受信後の残りcooldown秒数
+  - **Consecutive 429**: 連続429回数（情報表示のみ）
+  - **Pause / Resume ボタン**: カテゴリの手動一時停止・再開
+- **Custom Groups** (右、lazy-v2.11.0+): `queue_config.json` で定義したグループの状態をカード表示
+  - インディゴの左ボーダーで Categories と区別
+  - **マッチする endpoint パターン** をカード内に表示 (どの URL がそのグループに gating されるかが一目で分かる)
+  - 同じく Inflight / Cooldown / 429 / Pause / Resume
+  - 同梱の Bytedance Seedance v2.0 デフォルト (`t2v_sd2` / `i2v_sd2` / `r2v_sd2`) もここに表示
+
+#### Worker version 表示 (lazy-v2.11.0+)
+ヘッダー右側に worker のバージョン (`/api/version` 経由) を表示。古い worker (pre-v2.11.0) を踏んだ場合は `(pre-v2.11.0)` と表示し、Settings パネルに **graceful degrade banner** で復旧手順 (`curl -X POST .../api/worker/shutdown`) を案内します。jobs list と stats は引き続き機能します。
 
 #### 登録済みスキル一覧
 - `.claude/skills/` と `.agents/skills/` のスキルを自動走査
@@ -749,20 +769,25 @@ python .claude/skills/queue-dashboard/scripts/queue_dashboard.py
 
 ### 設定パネル（☰ ハンバーガーメニュー）
 
-ヘッダー左の ☰ ボタンから、キューシステムの設定をリアルタイムに変更できます。
+ヘッダー左の ☰ ボタンから、キューシステムの設定をリアルタイムに変更できます。**lazy-v2.11.0+** では per-category と per-group の独立編集に対応。
 
+#### Category Limits グリッド (lazy-v2.11.0+)
+カテゴリ (t2i / i2i / t2v / i2v) ごとに 1 行、それぞれ `Max Inflight` / `Min Interval (s)` / `429 Cooldown (s)` の入力欄。空欄のまま Apply すると **そのフィールドだけ送信されない** ので、特定の値だけ変えたいときに便利 (`0` は有効値として送信)。
+
+#### Custom Groups Limits グリッド (lazy-v2.11.0+)
+`queue_config.json` で定義した各グループに 1 行ずつ。Group 名にカーソルを乗せると tooltip でマッチ対象 endpoint パターンを確認できます。
+
+#### その他の設定
 | 設定 | デフォルト | 説明 |
 |------|-----------|------|
-| **Max Inflight** | 1 | カテゴリあたりの同時submit数 |
-| **Min Interval (s)** | 1.0 | カテゴリ内submit間の最小待ち時間 |
-| **429 Cooldown (s)** | 3600 | 429受信後のcooldown秒数 |
-| **Max Concurrent** | 2 | エンドポイントあたりの同時ジョブ数 |
-| **EP Min Interval (s)** | 10.0 | エンドポイント内のdispatch間隔 |
-| **Idle Timeout (s)** | 60 | ワーカー自動停止までの秒数 |
+| **Endpoint Defaults: Max Concurrent** | 2 | エンドポイントあたりの同時ジョブ数 (per-endpoint 個別 override がない場合のデフォルト) |
+| **Endpoint Defaults: Min Interval (s)** | 10.0 | エンドポイント内の dispatch 間隔のデフォルト |
+| **Worker: Idle Timeout (s)** | 60 | ワーカー自動停止までの秒数 |
 
 - **Apply**: 変更を即座にワーカーに反映（再起動不要）
 - **Reload Current**: ワーカーから現在の設定値を再読み込み
 - 変更結果は Applied / Rejected / Requires Restart に分けて表示
+- **Compatibility banner** (lazy-v2.11.0+): worker が古い (`/api/config` に `category.limits` が無い) 場合、per-category/per-group 編集グリッドの代わりに復旧手順を案内するバナーを表示
 
 ### ワーカー管理ボタン
 
