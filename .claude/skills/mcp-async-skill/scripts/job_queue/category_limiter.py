@@ -10,21 +10,32 @@ Manages per-category (t2i, i2i, t2v, i2v) dispatch gating with
 - Immediate pause with detailed reason on non-429 submit errors
 - Manual pause/resume with category state reporting
 
-Each category has its own `max_inflight`, `min_interval`, `exhaust_cooldown`
-configured via the `limits` mapping. Categories or keys not in `limits`
-fall back to module-level hardcoded defaults (this is a safety net for
-config typos; the canonical schema fully populates `limits`).
+Each category has its own `max_inflight`, `min_interval`,
+`exhaust_cooldown` configured via the `limits` mapping. Categories or
+keys not in `limits` fall back to module-level hardcoded defaults
+(this is a safety net for config typos; the canonical schema fully
+populates `limits`).
 
-429 errors trigger a cooldown but do NOT auto-pause the category.
-The job is returned to pending and retried after the cooldown expires.
+429 errors trigger a cooldown but do NOT auto-pause the category. The
+job is returned to pending and retried after the cooldown expires.
 Only non-429 errors (which consume server quota) trigger an immediate
 category pause to prevent further quota waste.
+
+Refactor note (PR4 / #60)
+-------------------------
+
+Inflight / cooldown / pause / 429-counter primitives moved into
+:class:`~job_queue.limiter_state.LimiterStateMixin` so the same
+state machine can back :class:`~job_queue.custom_group_limiter.CustomGroupLimiter`
+without duplication. CategoryLimiter retains its public API
+(``can_submit``, ``acquire_inflight``, ``release_inflight``,
+``set_max_inflight``, etc.) verbatim — see ``test_category_limiter.py``
+for the contract.
 """
 import logging
-import threading
-import time
-from datetime import datetime, timezone
 from urllib.parse import urlparse
+
+from .limiter_state import LimiterStateMixin
 
 logger = logging.getLogger(__name__)
 
@@ -34,15 +45,25 @@ DEFAULT_ALIASES: dict[str, str] = {"r2i": "i2i", "r2v": "i2v"}
 
 # Hardcoded fallback values for categories / keys missing from `limits`.
 # The canonical schema is to fully populate `limits.{cat}.{key}` for each
-# known category. These defaults exist only as a safety net for config typos
-# and for unit-test convenience.
+# known category. These defaults exist only as a safety net for config
+# typos and for unit-test convenience.
 HARDCODED_DEFAULT_MAX_INFLIGHT: int = 1
 HARDCODED_DEFAULT_MIN_INTERVAL: float = 1.0
 HARDCODED_DEFAULT_EXHAUST_COOLDOWN: float = 3600.0
 
 
-class CategoryLimiter:
-    """Category limiter with per-category inflight, cooldown, and pause control."""
+class CategoryLimiter(LimiterStateMixin):
+    """Category limiter with per-category inflight, cooldown, and pause control.
+
+    Inherits the inflight / cooldown / pause primitives from
+    :class:`LimiterStateMixin`. CategoryLimiter itself owns:
+
+    * The set of valid categories (``_categories``) + alias map
+    * The per-category limit dicts (``_max_inflight`` / ``_min_interval``
+      / ``_exhaust_cooldown``)
+    * URL-to-category extraction (``extract_category``)
+    * Legacy schema migration with one-shot deprecation warning
+    """
 
     def __init__(self, config: dict | None = None):
         config = config or {}
@@ -54,7 +75,9 @@ class CategoryLimiter:
         else:
             # Legacy: extract from "limits" keys if present, else use defaults
             limits_block = config.get("limits", None)
-            self._categories = set(limits_block.keys()) if limits_block else set(KNOWN_CATEGORIES)
+            self._categories = (
+                set(limits_block.keys()) if limits_block else set(KNOWN_CATEGORIES)
+            )
 
         self._aliases: dict[str, str] = {
             **DEFAULT_ALIASES,
@@ -68,19 +91,13 @@ class CategoryLimiter:
 
         legacy_used = self._load_limits_from_config(config)
 
-        # ---- Pause / runtime state ----
-        self._paused: set[str] = set()
-        self._pause_reason: dict[str, dict] = {}
-        self._last_submit: dict[str, float] = {}
-        self._inflight: dict[str, int] = {}
-        self._exhaust_time: dict[str, float] = {}
-        self._consecutive_429: dict[str, int] = {}
+        # ---- Pause / runtime state (provided by LimiterStateMixin) ----
+        self._init_state()
 
-        self._lock = threading.Lock()
-
-        # v3 fix #9: deprecation warning fires once per CategoryLimiter instance
-        # (not process-globally). Multiple workers / multiple limiters each emit
-        # their own warning, which is intentional for visibility.
+        # PR1 fix #9: deprecation warning fires once per CategoryLimiter
+        # instance (not process-globally). Multiple workers / multiple
+        # limiters each emit their own warning, which is intentional for
+        # visibility.
         if legacy_used:
             logger.warning(
                 "[CategoryLimiter] (instance %s) DEPRECATED: flat "
@@ -97,8 +114,7 @@ class CategoryLimiter:
 
     def _load_limits_from_config(self, config: dict) -> bool:
         """Populate per-category dicts from config. Returns True if legacy
-        flat schema was used (so caller can emit a deprecation warning).
-        """
+        flat schema was used (so caller can emit a deprecation warning)."""
         new_limits = config.get("limits", None)
         legacy_max = config.get("max_category_inflight", None)
         legacy_interval = config.get("min_interval", None)
@@ -121,7 +137,11 @@ class CategoryLimiter:
         # ---- Legacy schema: flat `max_category_inflight` etc. ----
         # Fan out the legacy scalar value to ALL configured categories that
         # don't already have a per-category override. The new schema wins.
-        if legacy_max is not None or legacy_interval is not None or legacy_cooldown is not None:
+        if (
+            legacy_max is not None
+            or legacy_interval is not None
+            or legacy_cooldown is not None
+        ):
             legacy_used = True
             for cat in self._categories:
                 if legacy_max is not None and cat not in self._max_inflight:
@@ -233,7 +253,8 @@ class CategoryLimiter:
                 return False
 
             # Enforce minimum interval between submits
-            now = time.monotonic()
+            import time as _time
+            now = _time.monotonic()
             min_interval = self._min_interval.get(category, HARDCODED_DEFAULT_MIN_INTERVAL)
             if (now - self._last_submit.get(category, 0.0)) < min_interval:
                 return False
@@ -243,37 +264,36 @@ class CategoryLimiter:
             if self._inflight.get(category, 0) >= max_inflight:
                 return False
 
-            # Cooldown check (429 rolling window)
-            exhaust_at = self._exhaust_time.get(category, 0.0)
-            if exhaust_at > 0:
-                cooldown = self._exhaust_cooldown.get(
-                    category, HARDCODED_DEFAULT_EXHAUST_COOLDOWN
+            # Cooldown check (429 rolling window) — uses mixin helper
+            cooldown = self._exhaust_cooldown.get(
+                category, HARDCODED_DEFAULT_EXHAUST_COOLDOWN
+            )
+            if not self._check_cooldown_locked(category, cooldown, now):
+                return False
+            # If the cooldown just expired the helper logged nothing; preserve
+            # the legacy info-log here for parity with previous behaviour.
+            if category not in self._exhaust_time and self._consecutive_429.get(category, 0) > 0:
+                # The cooldown was active and just expired; surface that fact.
+                logger.info(
+                    "[CategoryLimiter] Cooldown expired for %s, resuming", category,
                 )
-                if (now - exhaust_at) < cooldown:
-                    return False
-                else:
-                    # Cooldown expired
-                    self._exhaust_time.pop(category, None)
-                    logger.info(
-                        "[CategoryLimiter] Cooldown expired for %s, resuming",
-                        category,
-                    )
 
             return True
 
     def touch_submit(self, category: str | None):
-        """Update last-submit timestamp (for min_interval enforcement)."""
-        if category is None:
-            return
-        with self._lock:
-            self._last_submit[category] = time.monotonic()
+        """Update last-submit timestamp (for min_interval enforcement).
+
+        Overrides the mixin to keep the legacy-vs-new key acceptance
+        behaviour: unknown keys are silently ignored at the mixin level
+        already, but we still want to no-op for ``None``.
+        """
+        super().touch_submit(category)
 
     def record_success(self, category: str | None):
         """Record a successful submit — resets consecutive 429 counter."""
-        if category is None:
+        if category is None or category not in self._categories:
             return
-        with self._lock:
-            self._consecutive_429.pop(category, None)
+        super().record_success(category)
 
     # ------------------------------------------------------------------
     # Inflight control
@@ -290,14 +310,9 @@ class CategoryLimiter:
             return False
         with self._lock:
             if category not in self._categories:
-                # v3 fix #1: do not create inflight state for unknown
                 return False
             max_inflight = self._max_inflight.get(category, HARDCODED_DEFAULT_MAX_INFLIGHT)
-            current = self._inflight.get(category, 0)
-            if current >= max_inflight:
-                return False
-            self._inflight[category] = current + 1
-            return True
+            return self._acquire_inflight_locked(category, max_inflight)
 
     def release_inflight(self, category: str | None, success: bool):
         """Release an inflight slot."""
@@ -307,7 +322,7 @@ class CategoryLimiter:
             if category not in self._categories:
                 # No state to release for unknown (acquire_inflight returned False)
                 return
-            self._inflight[category] = max(0, self._inflight.get(category, 0) - 1)
+            self._release_inflight_locked(category)
 
     # ------------------------------------------------------------------
     # Runtime config setters
@@ -369,8 +384,12 @@ class CategoryLimiter:
             limits = {}
             for cat in sorted(self._categories):
                 limits[cat] = {
-                    "max_inflight": self._max_inflight.get(cat, HARDCODED_DEFAULT_MAX_INFLIGHT),
-                    "min_interval": self._min_interval.get(cat, HARDCODED_DEFAULT_MIN_INTERVAL),
+                    "max_inflight": self._max_inflight.get(
+                        cat, HARDCODED_DEFAULT_MAX_INFLIGHT
+                    ),
+                    "min_interval": self._min_interval.get(
+                        cat, HARDCODED_DEFAULT_MIN_INTERVAL
+                    ),
                     "exhaust_cooldown": self._exhaust_cooldown.get(
                         cat, HARDCODED_DEFAULT_EXHAUST_COOLDOWN
                     ),
@@ -378,17 +397,14 @@ class CategoryLimiter:
             return {"limits": limits}
 
     # ------------------------------------------------------------------
-    # 429 handling (cooldown only — no auto-pause)
+    # 429 / pause overrides — restrict to known categories only
     # ------------------------------------------------------------------
 
     def force_cooldown(self, category: str | None):
         """Start rolling cooldown for the category (on 429)."""
-        if category is None:
+        if category is None or category not in self._categories:
             return
-        with self._lock:
-            if category not in self._categories:
-                return
-            self._exhaust_time[category] = time.monotonic()
+        super().force_cooldown(category)
 
     def record_429(self, category: str | None):
         """Increment consecutive 429 counter (informational only).
@@ -397,23 +413,9 @@ class CategoryLimiter:
         The cooldown from ``force_cooldown`` is sufficient — once it expires,
         the dispatcher will automatically retry pending jobs.
         """
-        if category is None:
+        if category is None or category not in self._categories:
             return
-        with self._lock:
-            if category not in self._categories:
-                return
-            count = self._consecutive_429.get(category, 0) + 1
-            self._consecutive_429[category] = count
-            if count % 10 == 0:
-                logger.info(
-                    "[CategoryLimiter] %s has hit %d consecutive 429s "
-                    "(cooldown handles retry automatically)",
-                    category, count,
-                )
-
-    # ------------------------------------------------------------------
-    # Error-triggered pause (non-429 only)
-    # ------------------------------------------------------------------
+        super().record_429(category)
 
     def pause_with_reason(
         self,
@@ -425,64 +427,40 @@ class CategoryLimiter:
         endpoint: str = "",
     ):
         """Pause category due to an error. Stores detailed reason."""
-        if category is None:
+        if category is None or category not in self._categories:
             return
-        with self._lock:
-            if category not in self._categories:
-                return
-            self._paused.add(category)
-            self._pause_reason[category] = {
-                "reason": reason,
-                "status_code": status_code,
-                "error_detail": error_detail[:2000],
-                "job_id": job_id,
-                "endpoint": endpoint,
-                "paused_at": datetime.now(timezone.utc).isoformat(),
-            }
-        logger.warning(
-            "[CategoryLimiter] Paused %s: %s (HTTP %s) — %s",
-            category, reason, status_code, error_detail[:200],
+        super().pause_with_reason(
+            category,
+            reason,
+            status_code=status_code,
+            error_detail=error_detail,
+            job_id=job_id,
+            endpoint=endpoint,
         )
 
     # ------------------------------------------------------------------
-    # Manual pause / resume
+    # Manual pause / resume — keep legacy method names for back-compat
     # ------------------------------------------------------------------
 
     def pause_category(self, category: str):
-        """Manually pause a category. Pending jobs stay in queue."""
-        with self._lock:
-            if category not in self._categories:
-                return
-            self._paused.add(category)
-            self._pause_reason[category] = {
-                "reason": "manual",
-                "paused_at": datetime.now(timezone.utc).isoformat(),
-            }
+        """Manually pause a category. Pending jobs stay in queue.
+
+        Legacy name retained from lazy-v2.10.x; delegates to the mixin's
+        ``pause_key`` after a known-category guard.
+        """
+        if category not in self._categories:
+            return
+        self.pause_key(category)
 
     def resume_category(self, category: str):
-        """Remove pause, clear reason and consecutive 429 counter."""
-        with self._lock:
-            if category not in self._categories:
-                return
-            self._paused.discard(category)
-            self._pause_reason.pop(category, None)
-            self._consecutive_429.pop(category, None)
-            # Also clear cooldown so dispatch resumes immediately
-            self._exhaust_time.pop(category, None)
+        """Remove pause, clear reason and consecutive 429 counter.
 
-    def is_paused(self, category: str | None) -> bool:
-        """Return True if *category* is paused."""
-        if category is None:
-            return False
-        with self._lock:
-            return category in self._paused
-
-    def get_pause_reason(self, category: str | None) -> dict | None:
-        """Return pause reason dict, or None if not paused."""
-        if category is None:
-            return None
-        with self._lock:
-            return self._pause_reason.get(category)
+        Legacy name retained from lazy-v2.10.x; delegates to the mixin's
+        ``resume_key`` after a known-category guard.
+        """
+        if category not in self._categories:
+            return
+        self.resume_key(category)
 
     # ------------------------------------------------------------------
     # Status reporting
@@ -494,17 +472,18 @@ class CategoryLimiter:
         Each category's `max_inflight` reflects its per-category value
         (v3 change: was a single shared value in lazy-v2.10.x).
         """
+        import time as _time
         with self._lock:
-            now = time.monotonic()
+            now = _time.monotonic()
             result = {}
             for cat in sorted(self._categories):
                 exhaust_at = self._exhaust_time.get(cat, 0.0)
                 cooldown = self._exhaust_cooldown.get(
                     cat, HARDCODED_DEFAULT_EXHAUST_COOLDOWN
                 )
-                cooldown_remaining = max(
-                    0.0, cooldown - (now - exhaust_at)
-                ) if exhaust_at > 0 else 0.0
+                cooldown_remaining = (
+                    max(0.0, cooldown - (now - exhaust_at)) if exhaust_at > 0 else 0.0
+                )
 
                 entry: dict = {
                     "paused": cat in self._paused,
