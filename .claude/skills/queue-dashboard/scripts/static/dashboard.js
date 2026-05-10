@@ -41,6 +41,10 @@ async function refresh() {
     workerConnected = true;
     renderSummary(stats);
     renderCategories(stats.category_limits || {});
+    // PR5 (#61): /api/stats now ships custom_groups runtime status
+    // alongside category_limits. Old workers (pre-PR4) don't include
+    // this field; the helper degrades to "(no custom groups configured)".
+    renderCustomGroups(stats.custom_groups || {});
     renderEndpoints(stats.endpoints || []);
     renderJobs(jobs.jobs || []);
     renderClock(stats.server_time_utc);
@@ -149,6 +153,81 @@ function renderCategories(categories) {
   }
 }
 
+function renderCustomGroups(groups) {
+  // PR5 (#61): the right-hand sibling of the Categories section.
+  // ``groups`` is the ``custom_groups`` block from /api/stats — keys
+  // are user-defined group names, values are the same status shape
+  // get_all_status() emits in CustomGroupLimiter (paused, inflight,
+  // max_inflight, exhaust_cooldown, cooldown_remaining_s, endpoints,
+  // pause_reason).
+  const grid = document.getElementById("group-grid");
+  if (!grid) return; // older index.html without the section
+  grid.innerHTML = "";
+  const entries = Object.entries(groups);
+  if (entries.length === 0) {
+    grid.appendChild(el("div", {
+      class: "empty-hint",
+      text: "(no custom groups configured)",
+    }));
+    return;
+  }
+  for (const [name, info] of entries) {
+    const card = el("div", {
+      class: "group-card " + (info.paused ? "paused" : ""),
+    });
+    card.appendChild(el("h3", { text: name }));
+
+    // Endpoints — collapsed text block; users mostly want the runtime
+    // values, but seeing the patterns confirms which group is gating
+    // a given URL.
+    if (Array.isArray(info.endpoints) && info.endpoints.length > 0) {
+      card.appendChild(el("div", {
+        class: "endpoints",
+        title: info.endpoints.join("\n"),
+        text: info.endpoints.length === 1
+          ? info.endpoints[0]
+          : `${info.endpoints[0]} (+${info.endpoints.length - 1} more)`,
+      }));
+    }
+
+    card.appendChild(el("div", {
+      text: `Inflight: ${info.inflight ?? 0}/${info.max_inflight ?? 1}`,
+    }));
+    card.appendChild(el("div", {
+      text: `Cooldown: ${info.cooldown_remaining_s ?? 0}s`,
+    }));
+    card.appendChild(el("div", {
+      text: `Consec 429: ${info.consecutive_429 ?? 0}`,
+    }));
+    card.appendChild(el("div", {
+      text: info.paused ? "⏸ PAUSED" : "▶ Active",
+    }));
+    if (info.pause_reason) {
+      card.appendChild(el("pre", {
+        class: "reason",
+        text: JSON.stringify(info.pause_reason, null, 2),
+      }));
+    }
+    card.appendChild(el("button", {
+      text: info.paused ? "Resume" : "Pause",
+      onclick: () => toggleGroup(name, info.paused),
+    }));
+    grid.appendChild(card);
+  }
+}
+
+async function toggleGroup(name, currentlyPaused) {
+  const action = currentlyPaused ? "resume" : "pause";
+  try {
+    await fetchJSON(`/api/groups/${encodeURIComponent(name)}/${action}`, { method: "POST" });
+    refresh();
+  } catch (e) {
+    // Worker returns 404 with available_groups for unknown name — surface
+    // the message as-is so the user can see the typo / missing group.
+    setStatus(false, `${action} group ${name}: ${e.message}`);
+  }
+}
+
 function renderEndpoints(endpoints) {
   const tbody = document.querySelector("#endpoint-table tbody");
   tbody.innerHTML = "";
@@ -245,28 +324,223 @@ function closeConfigPanel() {
   document.getElementById("config-overlay").hidden = true;
 }
 
+/* PR5 (#61): graceful-degrade settings panel.
+
+   The pre-PR1 layout was a single set of {max_inflight, min_interval,
+   exhaust_cooldown} inputs that mapped to flat `cfg.category.*` fields.
+   PR1 introduced per-category values under `cfg.category.limits.{cat}`
+   while keeping the flat fields as a legacy mirror, and PR4 added
+   `cfg.custom_groups.{name}`. The dashboard now:
+
+   * Reads the new shapes (renders one row per category, one card per
+     custom group) and drops the legacy flat input.
+   * Detects a pre-v2.11.0 worker by the absence of `cfg.category.limits`
+     and shows a `compat-banner` telling the user how to recover. The
+     rest of the dashboard (jobs / stats) keeps working — the banner
+     only suppresses the per-category form.
+   * Hits `/api/version` (worker shipped that endpoint in PR2) before
+     `/api/config` so the banner can quote the actual worker version
+     when it differs from this dashboard.
+*/
+
 async function loadConfig() {
+  let workerVersion = null;
   try {
-    const cfg = await fetchJSON("/api/config");
-    document.getElementById("cfg-max-inflight").value = cfg.category?.max_inflight ?? 1;
-    document.getElementById("cfg-min-interval").value = cfg.category?.min_interval ?? 1.0;
-    document.getElementById("cfg-cooldown").value = cfg.category?.exhaust_cooldown ?? 3600;
-    document.getElementById("cfg-max-concurrent").value = cfg.endpoint?.default_max_concurrent ?? 2;
-    document.getElementById("cfg-ep-interval").value = cfg.endpoint?.default_min_interval ?? 10.0;
-    document.getElementById("cfg-idle-timeout").value = cfg.worker?.idle_timeout ?? 60;
-    showConfigResult("", "");
+    const v = await fetchJSON("/api/version");
+    workerVersion = v.version;
+  } catch {
+    // /api/version is missing → almost certainly a pre-v2.11.0 worker.
+    // Leave workerVersion as null; the banner copy handles that case.
+  }
+
+  let cfg;
+  try {
+    cfg = await fetchJSON("/api/config");
   } catch (e) {
-    showConfigResult("Failed to load config: " + e.message, "error");
+    showCompatBanner(
+      "Failed to load /api/config from worker.\n" +
+      "  Reason: " + e.message + "\n" +
+      "  Is the worker running on " + (window.WORKER_URL || "127.0.0.1:54321") + "?",
+      "error",
+    );
+    return;
+  }
+
+  // Render endpoint defaults + worker settings unconditionally — these
+  // live outside the per-category schema and have not changed shape
+  // since lazy-v2.10.x.
+  document.getElementById("cfg-max-concurrent").value = cfg.endpoint?.default_max_concurrent ?? 2;
+  document.getElementById("cfg-ep-interval").value = cfg.endpoint?.default_min_interval ?? 10.0;
+  document.getElementById("cfg-idle-timeout").value = cfg.worker?.idle_timeout ?? 60;
+
+  // Worker version label in the header.
+  const verEl = document.getElementById("worker-version-info");
+  if (verEl) {
+    verEl.textContent = workerVersion
+      ? `Worker: ${workerVersion}`
+      : "Worker: (pre-v2.11.0)";
+  }
+
+  // PR5 fix #2: the headline test for "is this worker new enough" is
+  // the presence of `cfg.category.limits`. The pre-v2.11.0 shape was
+  // `cfg.category.{max_inflight,min_interval,exhaust_cooldown}` flat.
+  const limitsObj = cfg?.category?.limits;
+  const limitsObjValid = limitsObj && typeof limitsObj === "object" && !Array.isArray(limitsObj);
+  if (!limitsObjValid) {
+    showCompatBanner(
+      "Worker API appears to be pre-v2.11.\n" +
+      "This dashboard requires Worker v2.11.0 or later for per-category " +
+      "settings.\n" +
+      "Detected worker version: " + (workerVersion ?? "(unknown — /api/version missing)") + "\n" +
+      "Please upgrade or restart the worker:\n" +
+      "  curl -X POST http://127.0.0.1:54321/api/worker/shutdown\n" +
+      "then re-run a client command to spawn a fresh worker.",
+      "warn",
+    );
+    // Clear the per-category / per-group forms so we don't show stale
+    // values from an earlier load.
+    document.getElementById("cat-limits-grid").innerHTML = "";
+    document.getElementById("group-limits-grid").innerHTML = "";
+    return;
+  }
+
+  hideCompatBanner();
+  renderCategoryLimitsForm(limitsObj);
+  renderGroupLimitsForm(cfg.custom_groups || {});
+  showConfigResult("", "");
+}
+
+function showCompatBanner(message, level) {
+  const banner = document.getElementById("compat-banner");
+  if (!banner) return;
+  banner.textContent = message;
+  banner.className = "compat-banner compat-" + (level || "warn");
+  banner.hidden = false;
+}
+
+function hideCompatBanner() {
+  const banner = document.getElementById("compat-banner");
+  if (!banner) return;
+  banner.hidden = true;
+  banner.textContent = "";
+  banner.className = "compat-banner";
+}
+
+const _CAT_KEYS = ["max_inflight", "min_interval", "exhaust_cooldown"];
+
+function renderCategoryLimitsForm(limits) {
+  // limits = { t2i: { max_inflight, min_interval, exhaust_cooldown }, ... }
+  const grid = document.getElementById("cat-limits-grid");
+  grid.innerHTML = "";
+
+  // Header row (sorted category names — same order PR1 worker uses for
+  // the legacy mirror keys, so the user reads consistent ordering
+  // everywhere).
+  const cats = Object.keys(limits).sort();
+  if (cats.length === 0) {
+    grid.appendChild(el("div", { class: "empty-hint", text: "(no categories configured)" }));
+    return;
+  }
+
+  const header = el("div", { class: "cat-limits-grid-header" },
+    el("span", { text: "Category" }),
+    el("span", { text: "Max Inflight" }),
+    el("span", { text: "Min Interval (s)" }),
+    el("span", { text: "429 Cooldown (s)" }),
+  );
+  grid.appendChild(header);
+
+  for (const cat of cats) {
+    const vals = limits[cat] || {};
+    const row = el("div", { class: "cat-limits-row" });
+    row.appendChild(el("span", { class: "key-label", text: cat }));
+    for (const key of _CAT_KEYS) {
+      const input = el("input", {
+        type: "number",
+        min: key === "max_inflight" ? 1 : 0,
+        step: key === "min_interval" ? 0.1 : 1,
+      });
+      input.value = vals[key] ?? "";
+      input.dataset.cat = cat;
+      input.dataset.key = key;
+      row.appendChild(input);
+    }
+    grid.appendChild(row);
+  }
+}
+
+function renderGroupLimitsForm(groups) {
+  // groups = { name: { endpoints, max_inflight, min_interval, exhaust_cooldown } }
+  const grid = document.getElementById("group-limits-grid");
+  grid.innerHTML = "";
+
+  const names = Object.keys(groups);
+  if (names.length === 0) {
+    grid.appendChild(el("div", { class: "empty-hint", text: "(no custom groups configured)" }));
+    return;
+  }
+
+  const header = el("div", { class: "group-limits-grid-header" },
+    el("span", { text: "Group" }),
+    el("span", { text: "Max Inflight" }),
+    el("span", { text: "Min Interval (s)" }),
+    el("span", { text: "429 Cooldown (s)" }),
+  );
+  grid.appendChild(header);
+
+  for (const name of names) {
+    const vals = groups[name] || {};
+    const row = el("div", { class: "group-limits-row" });
+    row.appendChild(el("span", {
+      class: "key-label",
+      text: name,
+      title: Array.isArray(vals.endpoints) ? vals.endpoints.join("\n") : "",
+    }));
+    for (const key of _CAT_KEYS) {
+      const input = el("input", {
+        type: "number",
+        min: key === "max_inflight" ? 1 : 0,
+        step: key === "min_interval" ? 0.1 : 1,
+      });
+      input.value = vals[key] ?? "";
+      input.dataset.group = name;
+      input.dataset.key = key;
+      row.appendChild(input);
+    }
+    grid.appendChild(row);
   }
 }
 
 async function applyConfig() {
+  // Build per-category PATCH body from the rendered form. We only
+  // include fields the user actually changed (skip blank / invalid)
+  // so an unrelated category isn't accidentally clamped to 0.
+  const catLimits = {};
+  for (const input of document.querySelectorAll("#cat-limits-grid input")) {
+    const cat = input.dataset.cat;
+    const key = input.dataset.key;
+    if (!cat || !key) continue;
+    if (input.value === "") continue;
+    const num = Number(input.value);
+    if (!Number.isFinite(num)) continue;
+    if (!catLimits[cat]) catLimits[cat] = {};
+    catLimits[cat][key] = num;
+  }
+
+  // Same shape for custom_groups.
+  const grpLimits = {};
+  for (const input of document.querySelectorAll("#group-limits-grid input")) {
+    const grp = input.dataset.group;
+    const key = input.dataset.key;
+    if (!grp || !key) continue;
+    if (input.value === "") continue;
+    const num = Number(input.value);
+    if (!Number.isFinite(num)) continue;
+    if (!grpLimits[grp]) grpLimits[grp] = {};
+    grpLimits[grp][key] = num;
+  }
+
   const body = {
-    category: {
-      max_inflight: Number(document.getElementById("cfg-max-inflight").value),
-      min_interval: Number(document.getElementById("cfg-min-interval").value),
-      exhaust_cooldown: Number(document.getElementById("cfg-cooldown").value),
-    },
     endpoint: {
       default_max_concurrent: Number(document.getElementById("cfg-max-concurrent").value),
       default_min_interval: Number(document.getElementById("cfg-ep-interval").value),
@@ -275,6 +549,16 @@ async function applyConfig() {
       idle_timeout: Number(document.getElementById("cfg-idle-timeout").value),
     },
   };
+  // Only include category.limits / groups if the form actually had values
+  // for them — keeps the worker logs clean and avoids an empty
+  // `category.limits: {}` triggering a no-op apply.
+  if (Object.keys(catLimits).length > 0) {
+    body.category = { limits: catLimits };
+  }
+  if (Object.keys(grpLimits).length > 0) {
+    body.groups = grpLimits;
+  }
+
   try {
     const result = await fetchJSON("/api/config", {
       method: "PATCH",
