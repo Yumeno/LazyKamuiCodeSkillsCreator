@@ -21,6 +21,15 @@
   - `.github/workflows/release.yml` 強化: `__version__` stamp に pre/post `grep -q` 検証を追加。失敗を CI で止め、tarball が `0+dev` で出荷されて全クライアントが自己 mismatch 警告する事故を防止。同じ workflow が main にも書き戻すので git clone 派の利用者にも同じ version が見える
   - 詳細: [docs/version-handshake.md](docs/version-handshake.md)
 - 新規テスト: `test_versioning.py` (13 tests), `test_worker_version.py` (11 tests), one-shot guard / 4xx / 5xx ヘッダー / `/api/version` レスポンス形状 / constant wiring / health-probe 統合をカバー
+- **DB schema migration foundation** (#63): `PRAGMA user_version` ベースのマイグレーションフレームワークを導入 (Phase 1 では足場のみ、実カラム変更は将来 migration で対応)
+  - 新規モジュール `job_queue/migrations.py` に `MIGRATIONS` レジストリ (`Callable[[sqlite3.Connection], None]` 型注釈付き) と driver `apply_migrations()`
+  - `JobStore.__init__` を `_init_schema_and_migrations()` に改名し、(1) `CREATE TABLE IF NOT EXISTS` → (2) `apply_migrations` の順序固定で実行
+  - migration 001 (`migrate_001_initial`) は **required column NAMES のみ検証** (型・NOT NULL・DEFAULT は見ない、PHASE1_PLAN_v3 fix #7)
+  - 必須カラム欠損 → `RuntimeError` で停止 (自動修復しない、ユーザーに DB 退避を促す)
+  - 余分なカラム → warning ログのみで起動続行 (forward-compat: 新版 worker が追加したカラムを旧版が見るケース)
+  - migration 失敗時は connection を close して例外を re-raise (Windows 環境でファイルハンドル即解放)
+  - 詳細: [docs/db-migration.md](docs/db-migration.md)
+- 新規テスト: `test_db_migrations.py` (12 tests), 新規 DB / pre-PR3 DB upgrade / missing column rejection / extra columns warn / type drift acceptance / registry shape / driver behaviour をカバー
 
 ### Changed (BREAKING)
 - **`set_max_inflight(cat, value)` の `cat` 引数必須化**: lazy-v2.10.x の単一引数 `set_max_inflight(value)` (全カテゴリ一括変更) は削除。`set_min_interval` / `set_exhaust_cooldown` も同様。worker の `PATCH /api/config` ハンドラが「全カテゴリ一括」の API レイヤを emulate する。
