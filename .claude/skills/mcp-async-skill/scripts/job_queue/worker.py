@@ -159,11 +159,13 @@ class _RequestHandler(BaseHTTPRequestHandler):
         if self.path == "/api/stats":
             stats = app.store.get_stats_by_endpoint()
             cat_status = app.dispatcher.category_limiter.get_all_status()
+            grp_status = app.dispatcher.group_limiter.get_all_status()
             ep_pauses = app.dispatcher.get_all_endpoint_pauses()
             self._send_json(200, {
                 "server_time_utc": _utc_now_iso(),
                 "endpoints": stats,
                 "category_limits": cat_status,
+                "custom_groups": grp_status,
                 "endpoint_pauses": ep_pauses,
             })
             return
@@ -173,6 +175,17 @@ class _RequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, {
                 "server_time_utc": _utc_now_iso(),
                 "categories": cat_status,
+            })
+            return
+
+        if self.path == "/api/groups":
+            # PR4 (#60): runtime status of every configured custom group
+            # — patterns, current inflight / cooldown / pause / 429
+            # counter. Empty dict when no group is configured.
+            grp_status = app.dispatcher.group_limiter.get_all_status()
+            self._send_json(200, {
+                "server_time_utc": _utc_now_iso(),
+                "groups": grp_status,
             })
             return
 
@@ -196,8 +209,13 @@ class _RequestHandler(BaseHTTPRequestHandler):
                     "exhaust_cooldown": first_cat.get("exhaust_cooldown"),
                 }
 
+            # PR4 (#60): expose custom_groups configuration alongside
+            # the category block. Empty dict when no group is configured.
+            grp_cfg = app.dispatcher.group_limiter.get_config()
+
             self._send_json(200, {
                 "category": {**cat_cfg, **legacy_compat},
+                "custom_groups": grp_cfg.get("custom_groups", {}),
                 "endpoint": {
                     "default_max_concurrent": app.dispatcher.config.default_max_concurrent,
                     "default_min_interval": app.dispatcher.config.default_min_interval,
@@ -308,6 +326,41 @@ class _RequestHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": "Invalid category action. Use /api/categories/{category}/pause or /resume"})
             return
 
+        # PR4 (#60): custom group pause/resume — symmetric with the
+        # category endpoints above so the dashboard can use the same
+        # request shape for both.
+        if self.path.startswith("/api/groups/"):
+            parts = self.path.rstrip("/").split("/")
+            # /api/groups/{name}/{action}
+            if len(parts) == 5:
+                name = parts[3]
+                action = parts[4]
+                limiter = app.dispatcher.group_limiter
+                if not limiter.is_known_group(name):
+                    self._send_json(404, {
+                        "error": f"Unknown group: {name}",
+                        "available_groups": limiter.get_groups(),
+                    })
+                    return
+                if action == "pause":
+                    limiter.pause_group(name)
+                    self._send_json(200, {
+                        "group": name,
+                        "paused": True,
+                        "status": limiter.get_all_status().get(name, {}),
+                    })
+                    return
+                if action == "resume":
+                    limiter.resume_group(name)
+                    self._send_json(200, {
+                        "group": name,
+                        "paused": False,
+                        "status": limiter.get_all_status().get(name, {}),
+                    })
+                    return
+            self._send_json(400, {"error": "Invalid group action. Use /api/groups/{name}/pause or /resume"})
+            return
+
         if self.path == "/api/jobs":
             try:
                 body = json.loads(self._read_body())
@@ -348,12 +401,15 @@ class _RequestHandler(BaseHTTPRequestHandler):
 
             resp_data = {"job_id": job_id, "status": "pending"}
 
-            # Warn if the category is paused
-            limiter = app.dispatcher.category_limiter
-            cat = limiter.extract_category(endpoint)
-            if cat and limiter.is_paused(cat):
-                resp_data["warning"] = f"Category {cat} is paused"
-                reason = limiter.get_pause_reason(cat)
+            # Warn if the resolved limiter (group OR category) is paused.
+            # PR4 (#60): when an endpoint matches a custom group, the
+            # group takes over from the category — so the warning text
+            # should reflect what's actually gating the dispatch.
+            limiter, key = app.dispatcher._resolve_limiter(endpoint)
+            if limiter is not None and key is not None and limiter.is_paused(key):
+                kind = "Group" if limiter is app.dispatcher.group_limiter else "Category"
+                resp_data["warning"] = f"{kind} {key} is paused"
+                reason = limiter.get_pause_reason(key)
                 if reason:
                     resp_data["pause_reason"] = reason
 
@@ -470,6 +526,45 @@ class _RequestHandler(BaseHTTPRequestHandler):
                         setter(cat_name, v)
                         affected.append(cat_name)
                     applied[f"category.{key}"] = {"value": v, "affected": affected}
+
+            # PR4 (#60): per-group runtime tuning. Same per-key shape as
+            # category.limits.{cat}.{key} but rooted at the top level
+            # under `groups`. Unknown groups are rejected (vs unknown
+            # categories which are also rejected by limiter.set_*).
+            grp_block = body.get("groups", None)
+            if grp_block is not None and not isinstance(grp_block, dict):
+                rejected["groups"] = (
+                    f"must be object (got {type(grp_block).__name__})"
+                )
+                grp_block = None
+            if grp_block is not None:
+                grp_limiter = app.dispatcher.group_limiter
+                _GRP_KEY_SPEC = [
+                    ("max_inflight", grp_limiter.set_max_inflight, int, 1),
+                    ("min_interval", grp_limiter.set_min_interval, float, 0),
+                    ("exhaust_cooldown", grp_limiter.set_exhaust_cooldown, float, 0),
+                ]
+                for grp_name, overrides in grp_block.items():
+                    if not isinstance(overrides, dict):
+                        rejected[f"groups.{grp_name}"] = "must be object"
+                        continue
+                    if not grp_limiter.is_known_group(grp_name):
+                        rejected[f"groups.{grp_name}"] = "unknown group"
+                        continue
+                    for key, setter, vtype, vmin in _GRP_KEY_SPEC:
+                        if key not in overrides:
+                            continue
+                        v = overrides[key]
+                        try:
+                            v = vtype(v)
+                            if v < vmin:
+                                raise ValueError
+                            setter(grp_name, v)
+                            applied[f"groups.{grp_name}.{key}"] = v
+                        except (ValueError, TypeError):
+                            rejected[f"groups.{grp_name}.{key}"] = (
+                                f"must be {vtype.__name__} >= {vmin}"
+                            )
 
             # Endpoint defaults
             ep = body.get("endpoint", {})

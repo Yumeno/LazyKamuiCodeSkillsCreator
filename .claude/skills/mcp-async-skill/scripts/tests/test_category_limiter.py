@@ -458,5 +458,105 @@ class TestExtractCategory(unittest.TestCase):
         self.assertIsNone(lim.extract_category("https://example.com"))
 
 
+class TestCooldownExpiredLogOnce(unittest.TestCase):
+    """``can_submit`` logs ``Cooldown expired for X, resuming`` exactly
+    on the transition from "still in cooldown" to "first call after
+    expiry". Without that one-shot guarantee a busy dispatcher would
+    flood the log on every single subsequent dispatch round.
+
+    PR4 review (Codex): the previous condition
+    ``category not in self._exhaust_time and consecutive_429 > 0``
+    stayed true across many later calls because nothing cleared
+    ``consecutive_429`` until ``record_success`` ran. The fix is to
+    snapshot ``had_active_cooldown`` BEFORE the helper call and only
+    log on the active → expired transition.
+    """
+
+    def test_cooldown_expired_log_fires_at_most_once(self):
+        # max_inflight=10 so the cooldown is the only gating factor
+        lim = CategoryLimiter({
+            "categories": ["t2i"],
+            "limits": {"t2i": {"max_inflight": 10, "min_interval": 0.0,
+                                "exhaust_cooldown": 0.05}},
+        })
+        # Pretend a 429 just hit
+        lim.force_cooldown("t2i")
+        lim.record_429("t2i")
+
+        # Wait for the cooldown to expire
+        import time as _time
+        _time.sleep(0.06)
+
+        with self.assertLogs("job_queue.category_limiter", level="INFO") as cm1:
+            # First call after expiry: must log exactly once
+            self.assertTrue(lim.can_submit("t2i"))
+        expired_logs = [m for m in cm1.output if "Cooldown expired" in m]
+        self.assertEqual(len(expired_logs), 1,
+                         f"Expected exactly 1 expired log, got: {cm1.output}")
+
+        # Subsequent calls must NOT re-log even though
+        # _consecutive_429 is still non-zero (record_success has not
+        # run yet because no real submit happened).
+        # assertNoLogs is 3.10+; capture and check manually.
+        import logging as _logging
+        category_logger = _logging.getLogger("job_queue.category_limiter")
+        records: list = []
+
+        class _Capture(_logging.Handler):
+            def emit(self, record):
+                records.append(record)
+
+        handler = _Capture(level=_logging.INFO)
+        category_logger.addHandler(handler)
+        try:
+            for _ in range(5):
+                lim.can_submit("t2i")
+        finally:
+            category_logger.removeHandler(handler)
+
+        self.assertFalse(
+            any("Cooldown expired" in r.getMessage() for r in records),
+            f"Cooldown expired log must fire only on transition; got "
+            f"{[r.getMessage() for r in records]}",
+        )
+
+
+class TestTouchSubmitUnknownGuard(unittest.TestCase):
+    """``touch_submit`` must respect the same "unknown keys create no
+    state" contract as ``can_submit`` / ``acquire_inflight``.
+
+    PR4 review (Codex): the LimiterStateMixin's bare ``touch_submit``
+    inserts into ``_last_submit`` for any key, so an unknown category
+    fed by mistake (e.g. raw endpoint URL) would slowly grow the
+    dict. CategoryLimiter overrides to guard against that.
+    """
+
+    def test_touch_submit_unknown_creates_no_state(self):
+        lim = CategoryLimiter({
+            "categories": ["t2i"],
+            "limits": {"t2i": {"max_inflight": 1}},
+        })
+        lim.touch_submit("unknown")
+        self.assertNotIn("unknown", lim._last_submit)
+
+    def test_touch_submit_none_is_noop(self):
+        lim = CategoryLimiter({
+            "categories": ["t2i"],
+            "limits": {"t2i": {"max_inflight": 1}},
+        })
+        lim.touch_submit(None)
+        # No exception, no entry created
+        self.assertEqual(lim._last_submit, {})
+
+    def test_touch_submit_known_records_timestamp(self):
+        lim = CategoryLimiter({
+            "categories": ["t2i"],
+            "limits": {"t2i": {"max_inflight": 1}},
+        })
+        lim.touch_submit("t2i")
+        self.assertIn("t2i", lim._last_submit)
+        self.assertGreater(lim._last_submit["t2i"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

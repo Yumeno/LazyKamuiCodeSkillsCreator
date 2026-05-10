@@ -25,6 +25,7 @@ Claude Code用のMCPスキルジェネレーター。非同期ジョブパター
 | **キュー堅牢化** | ゾンビジョブ回復・指数バックオフリトライ・429 Retry-After対応・ワーカー側ダウンロード | 自動 | [📖](docs/queue_system_hardening.md) |
 | **カテゴリ別制御** | t2i/i2i/t2v/i2vカテゴリ単位でのinflight制御・429自動リトライ・非429エラー時のカテゴリ即pause | 自動 | [📖](docs/category-limits.md) |
 | **per-category 個別レートリミット** | 各カテゴリに独立した max_inflight / min_interval / exhaust_cooldown を設定可能 (`limits.{cat}.{key}`)。サービス側のカテゴリ別レートリミットに合わせて調整 | `queue_config.json` | [📖](docs/category-limits.md) |
+| **Custom Groups** | endpoint URL パターン (glob) で独自グループを定義し、カテゴリと独立にレートリミット。Bytedance Seedance v2.0 動画モデルが既定で同梱 (`t2v_sd2` / `i2v_sd2` / `r2v_sd2`) | `queue_config.json` | [📖](docs/custom-groups.md) |
 | **Worker version handshake** | 上書きインストールで古い worker daemon が残った場合に stderr で 1 回警告。`X-Worker-Version` ヘッダー + `GET /api/version` | 自動 | [📖](docs/version-handshake.md) |
 | **DB スキーマ migration 基盤** | `PRAGMA user_version` ベースの簡易マイグレーション。Phase 1 では足場のみ追加 (実カラム変更は将来 migration で対応) | 自動 | [📖](docs/db-migration.md) |
 | **セッション管理** | MCPセッションをendpoint単位でキャッシュ。認証サーバーへの負荷を削減 | 自動 | |
@@ -582,12 +583,41 @@ python mcp_async_call.py --resume-category t2i
       "i2v": {"max_inflight": 1, "min_interval": 1.0, "exhaust_cooldown": 3600}
     }
   },
+  "custom_groups": {
+    "t2v_sd2": {
+      "endpoints": [
+        "https://kamui-code.ai/t2v_sd2/fal/bytedance/seedance-v2.0",
+        "https://kamui-code.ai/t2v_sd2/fal/bytedance/seedance-v2.0-fast"
+      ],
+      "max_inflight": 1,
+      "min_interval": 10,
+      "exhaust_cooldown": 3600
+    },
+    "i2v_sd2": {
+      "endpoints": [
+        "https://kamui-code.ai/i2v_sd2/fal/bytedance/seedance-v2.0",
+        "https://kamui-code.ai/i2v_sd2/fal/bytedance/seedance-v2.0-fast"
+      ],
+      "max_inflight": 1,
+      "min_interval": 10,
+      "exhaust_cooldown": 3600
+    },
+    "r2v_sd2": {
+      "endpoints": [
+        "https://kamui-code.ai/r2v_sd2/fal/bytedance/seedance-v2.0-reference",
+        "https://kamui-code.ai/r2v_sd2/fal/bytedance/seedance-v2.0-fast-reference"
+      ],
+      "max_inflight": 1,
+      "min_interval": 10,
+      "exhaust_cooldown": 3600
+    }
+  },
   "job_retention_seconds": 86400,
   "results_dir": ".claude/queue/results"
 }
 ```
 
-> 📖 詳細: [キューシステム設計](docs/queue_system_design.md) / [堅牢化設計](docs/queue_system_hardening.md) / [カテゴリ別レートリミット (per-category limits)](docs/category-limits.md)
+> 📖 詳細: [キューシステム設計](docs/queue_system_design.md) / [堅牢化設計](docs/queue_system_hardening.md) / [カテゴリ別レートリミット (per-category limits)](docs/category-limits.md) / [Custom Groups (endpoint-pattern rate limiting)](docs/custom-groups.md)
 
 ## エラーハンドリング
 
