@@ -1,5 +1,39 @@
 # Changelog
 
+## [Unreleased] — targeting lazy-v2.11.0
+
+### Added
+- **Per-category individual rate limits** (#59): t2i / i2i / t2v / i2v ごとに `max_inflight` / `min_interval` / `exhaust_cooldown` を独立設定可能
+  - 新スキーマ `category_rate_limits.limits.{cat}.{key}` (旧スキーマ `max_category_inflight` は後方互換ロード + 1 回 deprecation log、`lazy-v2.13.0 以降で削除予定`)
+  - `PATCH /api/config` 新形式: `{"category": {"limits": {"t2v": {"max_inflight": 1}}}}`
+  - 旧 `lazy-v2.10.x dashboard` 互換: 旧形式 PATCH (`{"category": {"max_inflight": N}}`) を全カテゴリ一括適用として受理 (`_legacy_warning` を applied[] に含む)
+  - `GET /api/config` レスポンスに新キーと旧互換ミラーキー (`category.max_inflight` 等、最初のカテゴリの値) を併記
+  - `category_limiter.py` の public API 拡張: `is_known_category()`, `get_categories()`, `get_max_inflight(cat)`, `get_min_interval(cat)`, `get_exhaust_cooldown(cat)`
+  - 詳細: [docs/category-limits.md](docs/category-limits.md)
+- 新規テスト: `test_category_limiter.py` (37 tests), `test_worker_config.py` (18 tests), 並行性 / 後方互換 / 入力検証 / unknown endpoint dispatch / legacy timestamp parse をカバー
+
+### Changed (BREAKING)
+- **`set_max_inflight(cat, value)` の `cat` 引数必須化**: lazy-v2.10.x の単一引数 `set_max_inflight(value)` (全カテゴリ一括変更) は削除。`set_min_interval` / `set_exhaust_cooldown` も同様。worker の `PATCH /api/config` ハンドラが「全カテゴリ一括」の API レイヤを emulate する。
+- **`acquire_inflight("unknown") == can_submit("unknown") == False` に統一**: lazy-v2.10.x では unknown でハードコード default の inflight state を作っていたが、`can_submit` と整合しない不整合だった。現在は unknown は category accounting 対象外。dispatcher は `extract_category() is None` のとき category check をスキップする経路を従来から持っている。
+- `dispatcher.py` の `category_limiter._exhaust_cooldown` 直接参照を `get_exhaust_cooldown(category)` 公開 API 経由に変更 (per-category 化への移行で private 直触りが壊れるため)。
+
+### Fixed
+- **`db.py` purge_old_jobs / get_stale_polling のタイムスタンプ精度バグ** (PR #45 由来の silent failure):
+  - `95ebebb` で `update_status` が `_utc_now_iso()` (μs 精度) に切り替わったが、`purge_old_jobs` と `get_stale_polling` は SQL の `julianday('now')` (秒精度) を使い続けていた。Python 側のタイムスタンプが SQL の `now` より数百 μs 未来になり、経過時間が負になって `retention_seconds=0` でも 0 件削除になっていた。
+  - 修正: `_utc_now_iso()` をバインドパラメータとして渡し、両辺で同じ Python wall-clock を使用。
+- **`test_dispatcher_rate_limit.py` の 429 期待値** (PR #47 で意図的に変更されたが test 未更新):
+  - `Retry-After` ヘッダー無視 (kamuicode MCP は信頼できる Retry-After を返さない)
+  - per-category cooldown 適用 (デフォルト 3600s)
+  - 一律 `pending` に再キュー (remote_job_id があっても recovering にしない)
+  - テストを現仕様に合わせて書き直し、PR #47 の判断理由を docstring に明記
+- **`test_executor.py` の recovery session 期待値** (PR #47 SessionManager 導入で変更されたが test 未更新):
+  - kamuicode MCP の中継 session は短命、fal.ai の remote_job_id は長命というアーキテクチャに基づき、recovery 時は古い session_id を捨てて fresh middleware session で remote_job_id を polling する
+  - テストを「fresh session + remote_job_id 経由 polling」期待に書き直し
+
+### Compatibility
+- **lazy-v2.10.x の queue_config.json (旧 flat schema) は引き続き動作**します (起動時に `[CategoryLimiter] (instance ...) DEPRECATED: ...` 警告ログが 1 回出力)
+- **lazy-v2.10.x dashboard は引き続き動作**します (`GET /api/config` の旧互換ミラーキーで UI 値が空にならない)。ただし旧 dashboard から値編集すると **新 worker は全カテゴリに一括適用** します。per-category 編集には `lazy-v2.12.0` 以降の dashboard が必要。
+
 ## [lazy-v2.10.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.10.0) (2026-04-23)
 
 ### Fixed
