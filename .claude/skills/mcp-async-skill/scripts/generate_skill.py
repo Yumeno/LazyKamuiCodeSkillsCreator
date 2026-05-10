@@ -1017,6 +1017,12 @@ def generate_queue_config(endpoint: str) -> dict:
                 "i2v": dict(per_cat_default),
             },
         },
+        # PR4 (#60): user-defined endpoint groups with their own
+        # rate limits. Empty by default; populate to throttle a
+        # subset of endpoints (e.g. high-cost models) more strictly
+        # than their parent category. See docs/custom-groups.md for
+        # the schema and examples.
+        "custom_groups": {},
     }
 
 
