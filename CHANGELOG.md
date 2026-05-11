@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased] — targeting lazy-v2.12.0
+
+### Added
+- **Queue Dashboard: ジョブ詳細モーダルに Inputs / Outputs URL リンク化** ([#71](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/pull/71)):
+  - 完了 / 失敗ジョブをクリックして開く詳細モーダルの上部に **Inputs (submit args の URL)** と **Outputs (result の URL)** セクションを追加。`args` と `result` の JSON を再帰 walk して `https?://...` 文字列を全部抽出し、JSON path (`result.images[0].url` など) と共に一覧表示。
+  - **kamui-code MCP の二重 JSON エンコード対応**: kamui-code はレスポンスペイロードを `remote_result.content[].text` に *JSON 文字列として* 埋め込んで返します。walker は `{` / `[` で始まる文字列を try-parse して中も再帰し、path に `(parsed text)` ラベルを付けて出処を明示。これがないと完了ジョブの肝心な `images[].url` / `video.url` が表面に出ない。
+  - **ローカル生成物パス (`local_files`) の表示**: result に含まれる Windows (`C:\...`) / POSIX (`/home/...`) 絶対パスを別カテゴリ `local` として表示。`file://` リンクは多くのブラウザで開けないため Copy ボタンのみ提供 (Explorer / Finder に貼り付けて開く前提)。
+  - **画像 URL は thumbnail プレビュー** (lazy load) + Open / Copy ボタン。動画 / 音声 / その他は左ボーダーの色で kind を識別 (image=緑、video=紫、audio=黄、other=青)。
+  - **Copy ボタン**: 1 クリックで URL / パスをクリップボードへ (`navigator.clipboard.writeText`)、視覚フィードバック (`✓` → 1.5 秒後に元に戻る)。
+  - **モーダルメタヘッダー**: Job ID / Status pill (色付き) / Endpoint をモーダル先頭に表示。raw JSON 全文は `<details>` セクションに格納 (URL が見つかれば閉じた状態、見つからなければ開いた状態がデフォルト)。
+  - 抽出は副作用なし、`maxDepth=14` / `maxNodes=5000` の上限で大きな result blob でも UI freeze しない。実 DB サンプル (t2i / t2v_sd2 / r2v_sd2) で動作検証済み — r2v_sd2 の `image_urls[0]` (参照画像 URL) も Inputs に表面化。
+- 新規テスト: `test_dashboard_smoke.py::TestJobDetailUrlSurfacing` (5 tests) — index.html の `<div id="job-detail-content">` 化 / dashboard.js に `extractUrls` 関数定義 / `(parsed text)` 二重 JSON ラベル / `looksLikeLocalPath` 関数定義 / dashboard.css に `.url-section` + `.url-thumb` + 4 kind variant の存在を pin
+- 全 `scripts/tests/` で 423 tests pass (lazy-v2.11.1 から +5)
+
 ## [lazy-v2.11.1](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.11.1) (2026-05-10)
 
 ### Fixed
