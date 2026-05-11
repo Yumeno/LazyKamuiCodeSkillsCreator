@@ -525,6 +525,14 @@ h2 {
   min-width: 0;
 }
 
+#job-detail-content .url-more-paths {
+  color: #6b7280;
+  font-size: 0.95em;
+  font-style: italic;
+  cursor: help;
+  flex-shrink: 0;
+}
+
 #job-detail-content .url-kind-badge {
   font-size: 0.7em;
   font-weight: 600;

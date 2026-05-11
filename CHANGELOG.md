@@ -3,7 +3,7 @@
 ## [Unreleased] — targeting lazy-v2.12.0
 
 ### Added
-- **Queue Dashboard: ジョブ詳細モーダルに Inputs / Outputs URL リンク化** ([#71](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/pull/71)):
+- **Queue Dashboard: ジョブ詳細モーダルに Inputs / Outputs URL リンク化** ([#72](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/pull/72)):
   - 完了 / 失敗ジョブをクリックして開く詳細モーダルの上部に **Inputs (submit args の URL)** と **Outputs (result の URL)** セクションを追加。`args` と `result` の JSON を再帰 walk して `https?://...` 文字列を全部抽出し、JSON path (`result.images[0].url` など) と共に一覧表示。
   - **kamui-code MCP の二重 JSON エンコード対応**: kamui-code はレスポンスペイロードを `remote_result.content[].text` に *JSON 文字列として* 埋め込んで返します。walker は `{` / `[` で始まる文字列を try-parse して中も再帰し、path に `(parsed text)` ラベルを付けて出処を明示。これがないと完了ジョブの肝心な `images[].url` / `video.url` が表面に出ない。
   - **ローカル生成物パス (`local_files`) の表示**: result に含まれる Windows (`C:\...`) / POSIX (`/home/...`) 絶対パスを別カテゴリ `local` として表示。`file://` リンクは多くのブラウザで開けないため Copy ボタンのみ提供 (Explorer / Finder に貼り付けて開く前提)。
