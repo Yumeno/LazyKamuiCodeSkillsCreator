@@ -282,19 +282,396 @@ function renderJobs(jobs) {
   }
 }
 
+// ---- URL extraction (Inputs / Outputs surfacing) ----
+
+// `URL_RE` matches a string whose entire value is a URL — that's the
+// common case for fields like `images[].url` or `video.url`.
+// `EMBEDDED_URL_RE` is a global pattern used as a fallback when a
+// string is not entirely a URL (e.g. an error message that mentions
+// one). We deliberately stop at whitespace and common delimiters; this
+// is best-effort, not a parser.
+const URL_RE = /^https?:\/\/\S+$/i;
+const EMBEDDED_URL_RE = /https?:\/\/[^\s"'<>()\[\]{}]+/gi;
+
+// Windows absolute path (`C:\...` / `\\\\server\\share\\...`) or POSIX
+// absolute path (`/home/...`, `/Users/...`, `/workspace/...`, etc.).
+// The dashboard treats these as "local files" — they cannot be opened
+// as bare links in the browser (file:// is blocked on most setups),
+// but they appear in kamui-code result blobs (`local_files`) and the
+// user wants to see them next to the remote URLs.
+//
+// The POSIX prefix list is intentionally conservative (a bare `/` at
+// the start of a random string is too noisy to treat as a local path)
+// but covers the canonical Linux/macOS roots plus common container /
+// devcontainer / CI runner mount points (`/workspace`, `/app`,
+// `/data`, `/srv`, `/private/...`) and macOS volumes (`/Volumes`).
+const WIN_PATH_RE = /^[A-Za-z]:[\\\/]/;
+const UNC_PATH_RE = /^\\\\[^\\]+\\/;
+const POSIX_PATH_RE =
+  /^\/(?:home|Users|Volumes|tmp|var|opt|mnt|media|root|workspace|app|data|srv|private)\//;
+
+function classifyUrl(url) {
+  // Strip query / fragment before extension test to be safe.
+  const stripped = url.split(/[?#]/)[0];
+  if (/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(stripped)) return "image";
+  if (/\.(mp4|webm|mov|m4v|mkv)$/i.test(stripped)) return "video";
+  if (/\.(mp3|wav|ogg|flac|m4a|aac)$/i.test(stripped)) return "audio";
+  return "other";
+}
+
+function classifyLocalPath(path) {
+  if (/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(path)) return "image";
+  if (/\.(mp4|webm|mov|m4v|mkv)$/i.test(path)) return "video";
+  if (/\.(mp3|wav|ogg|flac|m4a|aac)$/i.test(path)) return "audio";
+  return "other";
+}
+
+function looksLikeLocalPath(s) {
+  return WIN_PATH_RE.test(s) || UNC_PATH_RE.test(s) || POSIX_PATH_RE.test(s);
+}
+
+// Walk an arbitrarily nested JSON structure and yield every URL-looking
+// string and local-file-path-looking string together with a
+// human-readable JSON path. Duplicate URLs at different paths are kept
+// (the path tells you which one is which).
+//
+// kamui-code MCP returns JSON where the *actual* result payload is a
+// JSON string embedded inside `remote_result.content[].text`. We
+// transparently parse such strings (if and only if they start with
+// `{` or `[` after trim and parse cleanly) and walk into them, marking
+// the path with `(parsed text)` so the user knows where the URL came
+// from. This is the difference between "wow this is great" and "where
+// is my output URL?" in practice.
+//
+// Maximum depth and node count are bounded to keep huge result blobs
+// from freezing the modal.
+function extractUrls(root, opts) {
+  const maxDepth = (opts && opts.maxDepth) || 14;
+  const maxNodes = (opts && opts.maxNodes) || 5000;
+  const out = [];
+  let nodes = 0;
+  function visit(node, path, depth) {
+    if (nodes++ > maxNodes) return;
+    if (depth > maxDepth) return;
+    if (node === null || node === undefined) return;
+    if (typeof node === "string") {
+      if (URL_RE.test(node)) {
+        out.push({ path, value: node, kind: classifyUrl(node), type: "url" });
+        return;
+      }
+      if (looksLikeLocalPath(node)) {
+        out.push({ path, value: node, kind: classifyLocalPath(node), type: "local" });
+        return;
+      }
+      // Embedded JSON (kamui-code wraps the real payload as a JSON
+      // string inside `content[].text`). Parse it transparently.
+      const trimmed = node.trim();
+      if (trimmed.length > 1 &&
+          (trimmed[0] === "{" || trimmed[0] === "[")) {
+        let parsed;
+        try { parsed = JSON.parse(trimmed); } catch { parsed = undefined; }
+        if (parsed !== undefined) {
+          visit(parsed, path + " (parsed text)", depth + 1);
+          return;
+        }
+      }
+      // Fallback: prose containing URLs (e.g. an error message that
+      // mentions one). Only extract if the string is moderately long
+      // and has at least one URL match; this keeps short field values
+      // like prompts that happen to mention a URL from drowning the
+      // Outputs section in irrelevant entries. We tag the path as
+      // "(in text)" to make the provenance obvious.
+      if (node.length <= 2048) {
+        EMBEDDED_URL_RE.lastIndex = 0;
+        let m;
+        while ((m = EMBEDDED_URL_RE.exec(node)) !== null) {
+          const u = m[0];
+          out.push({
+            path: path + " (in text)",
+            value: u,
+            kind: classifyUrl(u),
+            type: "url",
+          });
+        }
+      }
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i++) {
+        visit(node[i], path + "[" + i + "]", depth + 1);
+      }
+      return;
+    }
+    if (typeof node === "object") {
+      for (const key of Object.keys(node)) {
+        const subpath = path ? path + "." + key : key;
+        visit(node[key], subpath, depth + 1);
+      }
+    }
+  }
+  visit(root, "", 0);
+  return out;
+}
+
+// Group walker output so the same (type, value, kind) is rendered once
+// even if it appears at multiple JSON paths (common with kamui-code's
+// double-encoded result where the same URL shows up in both the outer
+// shape and the parsed inner JSON). The first path is the primary
+// label; the rest are kept in `extraPaths` for a "+N more" hover.
+function dedupeUrlEntries(entries) {
+  const byKey = new Map();
+  for (const e of entries) {
+    const key = e.type + "|" + e.kind + "|" + e.value;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.extraPaths.push(e.path);
+    } else {
+      byKey.set(key, {
+        path: e.path,
+        value: e.value,
+        kind: e.kind,
+        type: e.type,
+        extraPaths: [],
+      });
+    }
+  }
+  return Array.from(byKey.values());
+}
+
+// Copy `text` to the system clipboard. Tries the modern async
+// `navigator.clipboard.writeText` first; if that throws or is missing
+// (HTTP without secure context, older browsers, permissions policy),
+// falls back to a hidden <textarea> + document.execCommand("copy").
+// Returns `true` on success, `false` otherwise.
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall through to legacy path */ }
+
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    // Make it invisible but selectable and inside the document so
+    // execCommand("copy") will pick it up.
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    ta.style.top = "0";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return !!ok;
+  } catch {
+    return false;
+  }
+}
+
+// Minimal element helper. Intentionally does NOT support an `html`
+// (innerHTML) shortcut to keep XSS surface narrow — every user-facing
+// string in this modal comes from data the worker returns about jobs,
+// and all of it must go through textContent / a text child node.
+function _el(tag, attrs, ...children) {
+  const e = document.createElement(tag);
+  if (attrs) {
+    for (const k of Object.keys(attrs)) {
+      if (k === "class") e.className = attrs[k];
+      else if (k === "text") e.textContent = attrs[k];
+      else if (k.startsWith("on") && typeof attrs[k] === "function") {
+        e.addEventListener(k.slice(2).toLowerCase(), attrs[k]);
+      } else if (attrs[k] !== undefined && attrs[k] !== null) {
+        e.setAttribute(k, attrs[k]);
+      }
+    }
+  }
+  for (const c of children) {
+    if (c === null || c === undefined) continue;
+    e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  }
+  return e;
+}
+
+function _renderUrlEntry(entry) {
+  // entry = { path, value, kind, type }
+  // type ∈ { "url", "local" }; "local" cannot be linked but can be
+  // copied to clipboard so the user can paste it into Explorer.
+  const isLocal = entry.type === "local";
+  const wrap = _el("div", {
+    class: "url-entry url-kind-" + entry.kind +
+           (isLocal ? " url-entry-local" : ""),
+  });
+
+  const head = _el("div", { class: "url-head" });
+  const pathSpan = _el("span", { class: "url-path",
+    title: entry.path }, entry.path || "(root)");
+  head.appendChild(pathSpan);
+  // If the same URL appeared at multiple JSON paths, surface that as a
+  // discreet "+N more" suffix with the full list as tooltip — helpful
+  // for debugging without cluttering the row.
+  if (entry.extraPaths && entry.extraPaths.length > 0) {
+    head.appendChild(_el("span", {
+      class: "url-more-paths",
+      title: entry.extraPaths.join("\n"),
+    }, " (+" + entry.extraPaths.length + " more)"));
+  }
+  head.appendChild(_el("span", { class: "url-kind-badge" },
+    isLocal ? entry.kind + " (local)" : entry.kind));
+  wrap.appendChild(head);
+
+  // Thumbnail: only for remote http(s) images (file:// is blocked in
+  // most browsers, so a local image path cannot preview reliably).
+  if (!isLocal && entry.kind === "image") {
+    const a = _el("a", {
+      href: entry.value, target: "_blank", rel: "noopener noreferrer",
+      class: "url-thumb-link",
+    });
+    a.appendChild(_el("img", {
+      class: "url-thumb",
+      loading: "lazy",
+      decoding: "async",
+      src: entry.value,
+      alt: entry.path,
+    }));
+    wrap.appendChild(a);
+  }
+
+  const linkRow = _el("div", { class: "url-link-row" });
+  if (isLocal) {
+    // Plain text + copy. No <a href>: a file:// link from a normal http
+    // origin would be blocked by the browser, and surfacing a dead link
+    // is worse than not surfacing one.
+    linkRow.appendChild(_el("span", {
+      class: "url-text url-text-local", title: entry.value,
+    }, entry.value));
+  } else {
+    linkRow.appendChild(_el("a", {
+      href: entry.value, target: "_blank", rel: "noopener noreferrer",
+      class: "url-text", title: entry.value,
+    }, entry.value));
+  }
+  linkRow.appendChild(_el("button", {
+    class: "url-copy-btn", type: "button",
+    title: isLocal ? "Copy path" : "Copy URL",
+    onclick: async () => {
+      const btn = linkRow.querySelector(".url-copy-btn");
+      const ok = await copyToClipboard(entry.value);
+      if (btn) {
+        btn.textContent = ok ? "✓" : "✗";
+        setTimeout(() => { if (btn) btn.textContent = "⧉"; }, 1500);
+      }
+      if (!ok) {
+        alert("Copy failed: clipboard not available in this context.");
+      }
+    },
+  }, "⧉"));
+  wrap.appendChild(linkRow);
+
+  return wrap;
+}
+
+function _renderUrlSection(title, urls) {
+  const section = _el("section", { class: "url-section" });
+  const header = _el("h3", { class: "url-section-header" });
+  header.appendChild(_el("span", { class: "url-section-title" }, title));
+  header.appendChild(_el("span", { class: "url-section-count" },
+    String(urls.length)));
+  section.appendChild(header);
+
+  if (urls.length === 0) {
+    section.appendChild(_el("div", { class: "url-empty" }, "(no URLs found)"));
+    return section;
+  }
+  const list = _el("div", { class: "url-list" });
+  for (const u of urls) list.appendChild(_renderUrlEntry(u));
+  section.appendChild(list);
+  return section;
+}
+
 async function showJobDetail(jobId) {
   if (!jobId) return;
+  let data;
   try {
-    const data = await fetchJSON(`/api/jobs/${jobId}?include_args=true`);
-    const pretty = JSON.stringify(data, null, 2);
-    const content = document.getElementById("job-detail-content");
-    content.textContent = pretty.length > 50000
-      ? pretty.slice(0, 50000) + "\n\n... (truncated)"
-      : pretty;
-    openModal();
+    data = await fetchJSON(`/api/jobs/${jobId}?include_args=true`);
   } catch (e) {
     alert("Failed to load job: " + e.message);
+    return;
   }
+
+  // Parse result: API may return it either as already-parsed JSON or as
+  // a raw string (older worker versions). Be defensive.
+  let resultObj = data.result;
+  if (typeof resultObj === "string") {
+    try { resultObj = JSON.parse(resultObj); } catch { /* leave as string */ }
+  }
+  const argsObj = data.args;
+
+  const inputUrls = dedupeUrlEntries(
+    argsObj === undefined ? [] : extractUrls(argsObj));
+  const outputUrls = dedupeUrlEntries(
+    resultObj === undefined || resultObj === null ? [] : extractUrls(resultObj));
+
+  const content = document.getElementById("job-detail-content");
+  content.innerHTML = "";  // clear previous render
+
+  // Top summary row
+  const meta = _el("div", { class: "job-meta" });
+  meta.appendChild(_el("div", null,
+    _el("strong", null, "Job ID: "),
+    _el("code", null, data.job_id || jobId),
+  ));
+  // Normalize status into a CSS-class-safe form. The worker today only
+  // emits known statuses (pending / running / polling / completed /
+  // failed / cancelled), but anything weird leaking into the response
+  // would produce a malformed class attribute — replace non-class
+  // characters with `-`.
+  const statusRaw = data.status || "unknown";
+  const statusClass = String(statusRaw).toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+  meta.appendChild(_el("div", null,
+    _el("strong", null, "Status: "),
+    _el("span", { class: "job-status-pill st-" + statusClass }, statusRaw),
+  ));
+  if (data.endpoint) {
+    meta.appendChild(_el("div", null,
+      _el("strong", null, "Endpoint: "),
+      _el("code", null, data.endpoint),
+    ));
+  }
+  content.appendChild(meta);
+
+  // Inputs / Outputs sections
+  content.appendChild(_renderUrlSection("Inputs (URLs in submit args)", inputUrls));
+  content.appendChild(_renderUrlSection("Outputs (URLs in result)", outputUrls));
+
+  // Error (if any)
+  if (data.error) {
+    const errSection = _el("section", { class: "url-section error-section" });
+    errSection.appendChild(_el("h3", { class: "url-section-header" }, "Error"));
+    errSection.appendChild(_el("pre", { class: "error-text" }, String(data.error)));
+    content.appendChild(errSection);
+  }
+
+  // Raw JSON (still useful for debugging / copy-paste)
+  const rawHeader = _el("h3", { class: "url-section-header" });
+  rawHeader.appendChild(_el("span", { class: "url-section-title" }, "Raw JSON"));
+  const rawDetails = _el("details", { class: "raw-json-details" });
+  // Closed by default if there are URLs to look at, open if not.
+  if (inputUrls.length === 0 && outputUrls.length === 0) {
+    rawDetails.setAttribute("open", "open");
+  }
+  const summary = _el("summary", null, "Raw JSON (click to expand)");
+  rawDetails.appendChild(summary);
+  const pretty = JSON.stringify(data, null, 2);
+  rawDetails.appendChild(_el("pre", { class: "raw-json" },
+    pretty.length > 50000 ? pretty.slice(0, 50000) + "\n\n... (truncated)" : pretty
+  ));
+  content.appendChild(rawDetails);
+
+  openModal();
 }
 
 async function toggleCategory(cat, currentlyPaused) {

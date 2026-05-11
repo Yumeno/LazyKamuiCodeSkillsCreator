@@ -319,5 +319,90 @@ class TestProxyWhitelist(unittest.TestCase):
         self.assertEqual(self.worker.handler_cls.received_paths, before)
 
 
+class TestJobDetailUrlSurfacing(unittest.TestCase):
+    """lazy-v2.12.0: Job detail modal exposes Inputs / Outputs URLs
+    extracted by walking ``args`` and ``result`` JSON. The actual URL
+    walker is in dashboard.js so we cannot unit-test it from Python,
+    but we can pin a few static invariants so a regression in the
+    static assets is caught here:
+
+    1. ``index.html`` uses a ``<div id="job-detail-content">`` rather
+       than a ``<pre>``. The earlier pre-formatted version is incompat
+       with the new flex layout for the Inputs / Outputs sections.
+    2. ``dashboard.js`` exports an ``extractUrls`` symbol — the helper
+       any future test (or future Python smoke harness driving a
+       headless browser) would want to call.
+    3. ``dashboard.css`` carries the ``.url-section`` ruleset so the
+       Inputs / Outputs visual styling actually ships with releases.
+    """
+
+    STATIC_DIR = os.path.join(
+        REPO_ROOT, ".claude", "skills", "queue-dashboard", "scripts", "static",
+    )
+
+    def _read(self, name: str) -> str:
+        path = os.path.join(self.STATIC_DIR, name)
+        with open(path, "r", encoding="utf-8") as fp:
+            return fp.read()
+
+    def test_index_html_uses_div_for_job_detail_content(self):
+        html = self._read("index.html")
+        self.assertIn('<div id="job-detail-content">', html)
+        # No leftover <pre> form: that would override the new flex layout
+        self.assertNotIn('<pre id="job-detail-content"', html)
+
+    def test_dashboard_js_defines_extract_urls(self):
+        js = self._read("dashboard.js")
+        # The walker is called extractUrls(...) by both showJobDetail
+        # and (eventually) any future automated harness.
+        self.assertRegex(js, r"function\s+extractUrls\s*\(")
+        # Inputs and Outputs section titles ship in the JS — they are
+        # what the user sees first in the modal.
+        self.assertIn("Inputs (URLs in submit args)", js)
+        self.assertIn("Outputs (URLs in result)", js)
+
+    def test_dashboard_js_handles_kamui_double_encoded_result(self):
+        """kamui-code MCP wraps the actual result payload as a JSON
+        string inside `remote_result.content[].text`. The walker has to
+        try-parse string nodes that begin with `{` or `[`, otherwise
+        the output URL (`images[].url` / `video.url`) is invisible to
+        the user — which is exactly the failure mode the lazy-v2.12.0
+        feature is designed to prevent. Sample shape from real jobs:
+
+            "remote_result": {
+              "content": [
+                {"type": "text",
+                 "text": "{\\"video\\":{\\"url\\":\\"https://...\\"}}"}
+              ]
+            }
+        """
+        js = self._read("dashboard.js")
+        # The walker labels embedded JSON paths with "(parsed text)".
+        # Future-proofing: if the label changes, this test catches it.
+        self.assertIn("(parsed text)", js)
+
+    def test_dashboard_js_detects_local_paths(self):
+        """kamui-code results carry `local_files` with Windows or
+        POSIX absolute paths. The walker exposes those as a separate
+        'local' entry type so the user can copy-paste them into
+        Explorer / Finder. We pin the helper name to catch accidental
+        deletion."""
+        js = self._read("dashboard.js")
+        self.assertRegex(js, r"function\s+looksLikeLocalPath\s*\(")
+        # The 'local' kind needs to be wired through to the renderer
+        # — without this distinction the local path would silently get
+        # the 'url' kind and produce a dead <a href>.
+        self.assertRegex(js, r"type:\s*\"local\"")
+
+    def test_dashboard_css_has_url_section_styling(self):
+        css = self._read("dashboard.css")
+        self.assertIn(".url-section", css)
+        self.assertIn(".url-thumb", css)
+        # The 4 URL kind variants need their accent borders or the
+        # classification UX silently falls back to all-grey.
+        for kind in ("image", "video", "audio", "other"):
+            self.assertIn(f".url-kind-{kind}", css)
+
+
 if __name__ == "__main__":
     unittest.main()
