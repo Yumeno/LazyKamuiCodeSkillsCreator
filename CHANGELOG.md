@@ -33,12 +33,12 @@
     - 不正 JSON / prose / 数値などは付与しない (= フィールド非存在)
     - **ネスト展開は 1 段のみ**: `text_parsed` の中にさらに JSON-as-string が含まれていても再展開しない (worker の責務範囲を有限に保つため)
     - **サイズ上限なし**: streaming response や inline base64 のように multi-MB の payload を返すエンドポイントを正しく扱うため。`json.loads` 自体は数 MB で十数 ms オーダーなので応答時間に問題は出ない
-  - **`/api/jobs/<id>` の `args` の挙動は変えていません**: 引き続き parse 済み object として返ります (旧 lazy-v2.12 と同じ)。`args` 内の `content[].text` には `text_parsed` は **付与しません** — submitted args が round-trip で byte 一致することを期待する consumer (テスト・監査ログ等) を壊さないため。
+  - **`/api/jobs/<id>` の `args` の挙動は実質互換**: 旧 `json.loads(j["args"])` インライン処理を `_normalize_args_payload` ヘルパ経由に変更しましたが、内部実装は **同じく `json.loads` を直接呼ぶ** 形を維持。これにより legacy code が parse できていた **scalar JSON** (`"42"`, `"true"`, `"null"`, `"\"x\""`) も引き続き parse されて返ります。`args` 内の `content[].text` には `text_parsed` は **付与しません** — submitted args が round-trip で byte 一致することを期待する consumer (テスト・監査ログ等) を壊さないため。
 
 ### Added
 - **worker.py に `_normalize_result_payload` / `_normalize_args_payload` / `_annotate_content_text` / `_try_json_loads` を追加** ([#73](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/issues/73)): kamui-code MCP のレスポンス形状の理解を worker 単独の責務に集約。dashboard やその他のクライアントが二重 JSON ロジックを実装しなくて済みます。
-- 新規テスト: `test_worker_normalize.py` (30 tests) — `_try_json_loads` / `_annotate_content_text` / `_normalize_result_payload` / `_normalize_args_payload` の正常系・異常系を pin。サイズ上限なしを `test_parses_large_json_without_size_cap` (5 MB の valid JSON object) で明示。
-- 新規 smoke test: `test_dashboard_js_skips_text_when_text_parsed_is_present` — walker が text_parsed の sibling text をスキップすることを pin
+- 新規テスト: `test_worker_normalize.py` (31 tests) — `_try_json_loads` / `_annotate_content_text` / `_normalize_result_payload` / `_normalize_args_payload` の正常系・異常系を pin。サイズ上限なしを `test_parses_large_json_without_size_cap` (5 MB の valid JSON object) で明示。args の scalar JSON (`"42"`, `"true"`, `"null"` 等) 互換維持を `test_parses_scalar_json_for_legacy_compat` で pin。
+- 新規 smoke test (2 件): `test_dashboard_js_skips_text_when_text_parsed_is_present` — walker が text_parsed の sibling text をスキップすることを pin。`test_dashboard_js_skip_guard_handles_text_parsed_null` — text_parsed が null や非 object scalar の場合は skip しないことを pin (text に URL が埋まったままのケースを想定)。
 - **テスト fixture 中の URL は `https://example.com/...` を使用**: `test_worker_normalize.py` の二重 JSON テストでは「shape を pin したい」のが目的で、URL のドメイン値そのものは情報を持たない。下流 MCP サービスの実ドメインを test fixture に焼き付けない方針 (Issue [#76](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/issues/76))
 
 ### Changed

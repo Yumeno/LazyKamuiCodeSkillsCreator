@@ -303,6 +303,25 @@ class TestNormalizeArgsPayload(unittest.TestCase):
         d = {"a": 1, "b": 2}
         self.assertEqual(_normalize_args_payload(d), d)
 
+    def test_parses_scalar_json_for_legacy_compat(self):
+        """Legacy `json.loads(j["args"])` accepted scalar JSON values
+        (`"42"`, `"true"`, `"null"`, `"\\"x\\""`). The normalizer must
+        preserve that behavior — routing through a conservative
+        "looks like object/array" check would silently change the
+        return type for any consumer that submitted a bare JSON
+        scalar as args. Codex re-review #6."""
+        # Number scalar
+        self.assertEqual(_normalize_args_payload("42"), 42)
+        # Boolean scalar
+        self.assertEqual(_normalize_args_payload("true"), True)
+        # null scalar → Python None (distinct from "args was empty
+        # string", which still falls through as ""—see test_none_passes_through)
+        self.assertIsNone(_normalize_args_payload("null"))
+        # String scalar (JSON-encoded string → Python str)
+        self.assertEqual(_normalize_args_payload('"hello"'), "hello")
+        # Float
+        self.assertEqual(_normalize_args_payload("3.14"), 3.14)
+
     def test_does_not_recurse_into_content_text(self):
         """Even if (hypothetically) submitted args carried a
         ``remote_result.content[].text`` shape with JSON-as-string,

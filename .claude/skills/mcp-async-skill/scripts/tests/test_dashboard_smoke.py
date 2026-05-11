@@ -413,6 +413,33 @@ class TestJobDetailUrlSurfacing(unittest.TestCase):
             "JSON string, once from the parsed object). See Issue #73.",
         )
 
+    def test_dashboard_js_skip_guard_handles_text_parsed_null(self):
+        """`text_parsed: null` is NOT a structured form of `text` —
+        if a future client (or a malformed server) sends it, we must
+        still walk `text` so the URL is not silently lost. Codex
+        re-review #7 raised this as a defensive hardening item.
+
+        Pin the implementation by requiring the guard to test for
+        non-null and object type, not just `hasOwnProperty`."""
+        js = self._read("dashboard.js")
+        # Two complementary checks: explicit null exclusion and
+        # explicit object type assertion. Either alone would be
+        # easy to lose in a refactor; together they're hard to
+        # delete by accident.
+        self.assertIn(
+            "tp !== null", js,
+            "extractUrls's text_parsed skip guard must explicitly "
+            "exclude `null` so a `text_parsed: null` entry does not "
+            "cause `text` (which still carries the JSON string) to be "
+            "skipped, hiding URLs. Codex re-review #7.",
+        )
+        self.assertIn(
+            'typeof tp === "object"', js,
+            "extractUrls's text_parsed skip guard must require object "
+            "type so non-object scalars (e.g. `text_parsed: 42`) do "
+            "not trigger the skip path. Codex re-review #7.",
+        )
+
     def test_dashboard_js_detects_local_paths(self):
         """kamui-code results carry `local_files` with Windows or
         POSIX absolute paths. The walker exposes those as a separate

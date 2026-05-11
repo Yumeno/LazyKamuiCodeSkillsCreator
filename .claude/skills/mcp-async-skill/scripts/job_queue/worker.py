@@ -164,21 +164,30 @@ def _normalize_result_payload(result_raw: object) -> object:
 
 
 def _normalize_args_payload(args_raw: object) -> object:
-    """Mirror of :func:`_normalize_result_payload` for the ``args``
-    column. Today this is just ``json.loads`` with a string fallback;
-    we route it through this helper so future shape-specific
-    annotations can be added in one place. Does **not** expand any
-    embedded ``content[].text`` because submitted args have never
-    historically used that shape, and triggering surprise expansion
-    on a prompt that happens to look like JSON would be a footgun.
+    """Return the ``args`` column ready for the response.
+
+    Behavior is intentionally aligned with the legacy
+    ``json.loads(j["args"])`` path that lived inline in the request
+    handler before Issue #73 — including support for **scalar JSON**
+    values (``"42"``, ``"true"``, ``"null"``, ``"\\"x\\""``) which
+    legacy code parsed successfully. Routing through
+    :func:`_try_json_loads` (which only attempts parse when the
+    string starts with ``{`` or ``[``) would silently change the
+    return type for any consumer that submitted a bare JSON scalar
+    as ``args``.
+
+    Does **not** annotate any embedded ``remote_result.content[].text``
+    because submitted args have never historically used that shape,
+    and triggering surprise expansion on a prompt that happens to
+    look like JSON would be a footgun for round-trip consumers.
     """
     if args_raw is None or args_raw == "":
         return args_raw
     if isinstance(args_raw, str):
-        candidate = _try_json_loads(args_raw)
-        if candidate is None:
+        try:
+            return json.loads(args_raw)
+        except (json.JSONDecodeError, ValueError):
             return args_raw
-        return candidate
     return args_raw
 
 
