@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] — targeting lazy-v2.12.0
+## [lazy-v2.12.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.12.0) (2026-05-11)
 
 ### Added
 - **Queue Dashboard: ジョブ詳細モーダルに Inputs / Outputs URL リンク化** ([#72](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/pull/72)):
