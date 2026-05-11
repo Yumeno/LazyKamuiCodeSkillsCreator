@@ -39,6 +39,7 @@
 - **worker.py に `_normalize_result_payload` / `_normalize_args_payload` / `_annotate_content_text` / `_try_json_loads` を追加** ([#73](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/issues/73)): kamui-code MCP のレスポンス形状の理解を worker 単独の責務に集約。dashboard やその他のクライアントが二重 JSON ロジックを実装しなくて済みます。
 - 新規テスト: `test_worker_normalize.py` (30 tests) — `_try_json_loads` / `_annotate_content_text` / `_normalize_result_payload` / `_normalize_args_payload` の正常系・異常系を pin。サイズ上限なしを `test_parses_large_json_without_size_cap` (5 MB の valid JSON object) で明示。
 - 新規 smoke test: `test_dashboard_js_skips_text_when_text_parsed_is_present` — walker が text_parsed の sibling text をスキップすることを pin
+- **テスト fixture 中の URL は `https://example.com/...` を使用**: `test_worker_normalize.py` の二重 JSON テストでは「shape を pin したい」のが目的で、URL のドメイン値そのものは情報を持たない。下流 MCP サービスの実ドメインを test fixture に焼き付けない方針 (Issue [#76](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/issues/76))
 
 ### Changed
 - **dashboard.js: `extractUrls` から二重 JSON parse 分岐を削除**: lazy-v2.13.0 worker が `text_parsed` を併記するようになったので、JavaScript 側で `JSON.parse(trimmed)` を呼ぶ必要がなくなりました。`(parsed text)` という path ラベルも消えます。これにより dashboard.js の純粋ロジックが縮小し、kamui-code 固有の応答形状に依存しないシンプルな再帰 walker になります。

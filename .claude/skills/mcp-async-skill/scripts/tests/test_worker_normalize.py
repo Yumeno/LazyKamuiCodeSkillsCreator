@@ -183,7 +183,7 @@ class TestNormalizeResultPayload(unittest.TestCase):
         """Real kamui-code shape from production: the outer `result`
         is JSON-string, and inside it `remote_result.content[].text`
         is another JSON-encoded string carrying the actual URLs."""
-        inner = {"images": [{"url": "https://v3b.fal.media/files/a.png"}]}
+        inner = {"images": [{"url": "https://example.com/files/a.png"}]}
         outer = {
             "remote_result": {
                 "content": [
@@ -209,7 +209,7 @@ class TestNormalizeResultPayload(unittest.TestCase):
     def test_kamui_double_json_video_url(self):
         """Same as above but with the video.url shape (t2v / r2v
         completed jobs)."""
-        inner = {"video": {"url": "https://v3b.fal.media/files/v.mp4"},
+        inner = {"video": {"url": "https://example.com/files/v.mp4"},
                  "seed": 12345}
         outer = {
             "remote_result": {
