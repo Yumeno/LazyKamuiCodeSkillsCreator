@@ -61,6 +61,125 @@ def _age_seconds(ts: str | None) -> float | None:
     return (datetime.now(timezone.utc) - dt).total_seconds()
 
 
+# Maximum byte length of a `content[].text` field that we'll try to
+# parse as JSON. Above this we leave it alone — the cost of parsing
+# a megabyte of accidental binary-as-text is not worth the chance of
+# finding embedded URLs, and the dashboard already shows the raw text
+# under "Raw JSON".
+_TEXT_PARSE_MAX_BYTES = 1_000_000
+
+
+def _try_json_loads(s: str) -> object | None:
+    """Return ``json.loads(s)`` if *s* looks like a JSON object or array,
+    otherwise return ``None``. Never raises. Used to expand kamui-code
+    MCP's ``content[].text`` payload (which is a JSON-encoded string
+    inside the outer result) so the dashboard does not have to
+    re-implement the parsing client-side.
+
+    Conservative: only attempts parse when the trimmed string starts
+    with ``{`` or ``[``. Bare strings, numbers, prose, etc. are never
+    misinterpreted as embedded JSON.
+    """
+    if not isinstance(s, str):
+        return None
+    if len(s) > _TEXT_PARSE_MAX_BYTES:
+        return None
+    t = s.strip()
+    if not t or t[0] not in ("{", "["):
+        return None
+    try:
+        return json.loads(t)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _annotate_content_text(content: list) -> None:
+    """Walk a ``content`` array (as found under
+    ``remote_result.content`` in kamui-code MCP results) and, for each
+    entry whose ``text`` is a JSON-encoded object/array, set a
+    sibling ``text_parsed`` field with the parsed value.
+
+    Operates **in-place** on the list's dict entries. Single-level
+    expansion only: if ``text_parsed`` itself contains nested
+    JSON-as-string, we do not recurse — keeping the normalization
+    bounded and predictable.
+
+    Defensive: tolerates ``content`` items that are not dicts, missing
+    keys, non-string text, parse failures. None of those should raise
+    or block the response.
+    """
+    if not isinstance(content, list):
+        return
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str):
+            continue
+        parsed = _try_json_loads(text)
+        if parsed is not None:
+            item["text_parsed"] = parsed
+
+
+def _normalize_result_payload(result_raw: object) -> object:
+    """Promote a raw ``result`` value (typically a JSON string from the
+    DB) into a fully-parsed dict, and annotate kamui-code MCP shapes
+    so clients do not need to re-parse ``content[].text`` themselves.
+
+    Behavior:
+
+    * If *result_raw* is ``None`` or ``""`` → returned unchanged.
+    * If *result_raw* is a string that parses as JSON → returns the
+      parsed value; if the parsed value has the
+      ``remote_result.content`` shape, its content entries get
+      ``text_parsed`` annotations (single-level).
+    * If *result_raw* is a string that does not parse as JSON → returned
+      as-is (the response still carries it so the client can decide
+      how to render it). This keeps the response usable even when a
+      job's executor stored unstructured text.
+    * If *result_raw* is already a dict/list (defensive — should not
+      happen via DB roundtrip today, but guards against future code
+      paths that pre-parse) → annotation is still applied.
+    """
+    if result_raw is None or result_raw == "":
+        return result_raw
+    parsed: object
+    if isinstance(result_raw, str):
+        candidate = _try_json_loads(result_raw)
+        if candidate is None:
+            return result_raw  # leave non-JSON string alone
+        parsed = candidate
+    else:
+        parsed = result_raw
+
+    if isinstance(parsed, dict):
+        remote = parsed.get("remote_result")
+        if isinstance(remote, dict):
+            content = remote.get("content")
+            if isinstance(content, list):
+                _annotate_content_text(content)
+    return parsed
+
+
+def _normalize_args_payload(args_raw: object) -> object:
+    """Mirror of :func:`_normalize_result_payload` for the ``args``
+    column. Today this is just ``json.loads`` with a string fallback;
+    we route it through this helper so future shape-specific
+    annotations can be added in one place. Does **not** expand any
+    embedded ``content[].text`` because submitted args have never
+    historically used that shape, and triggering surprise expansion
+    on a prompt that happens to look like JSON would be a footgun.
+    """
+    if args_raw is None or args_raw == "":
+        return args_raw
+    if isinstance(args_raw, str):
+        candidate = _try_json_loads(args_raw)
+        if candidate is None:
+            return args_raw
+        return candidate
+    return args_raw
+
+
 class _RequestHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the worker API."""
 
@@ -144,10 +263,7 @@ class _RequestHandler(BaseHTTPRequestHandler):
                     "error": j["error"],
                 }
                 if include_args:
-                    try:
-                        entry["args"] = json.loads(j["args"])
-                    except (json.JSONDecodeError, TypeError):
-                        entry["args"] = j["args"]
+                    entry["args"] = _normalize_args_payload(j["args"])
                 job_list.append(entry)
             self._send_json(200, {
                 "server_time_utc": _utc_now_iso(),
@@ -253,6 +369,15 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 return
             created_age = _age_seconds(job["created_at"])
             updated_age = _age_seconds(job["updated_at"])
+            # `result` is stored in the DB as a JSON-encoded string. We
+            # used to forward it to the client untouched, leaving every
+            # consumer to re-parse it (and to deal with kamui-code's
+            # double-JSON-encoded `remote_result.content[].text`). As of
+            # Issue #73, the worker is the single place that performs
+            # that normalization so the dashboard (and any future CLI /
+            # client) sees a fully-structured object with `text_parsed`
+            # already populated. See `_normalize_result_payload` for
+            # the rules.
             resp_data = {
                 "server_time_utc": _utc_now_iso(),
                 "job_id": job["id"],
@@ -261,15 +386,12 @@ class _RequestHandler(BaseHTTPRequestHandler):
                 "updated_at": job["updated_at"],
                 "created_age_seconds": round(created_age, 1) if created_age is not None else None,
                 "updated_age_seconds": round(updated_age, 1) if updated_age is not None else None,
-                "result": job["result"],
+                "result": _normalize_result_payload(job["result"]),
                 "error": job["error"],
                 "remote_job_id": job["remote_job_id"],
             }
             if _include_args:
-                try:
-                    resp_data["args"] = json.loads(job["args"])
-                except (json.JSONDecodeError, TypeError):
-                    resp_data["args"] = job["args"]
+                resp_data["args"] = _normalize_args_payload(job["args"])
             self._send_json(200, resp_data)
             return
 

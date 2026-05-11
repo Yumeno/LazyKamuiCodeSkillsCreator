@@ -361,25 +361,33 @@ class TestJobDetailUrlSurfacing(unittest.TestCase):
         self.assertIn("Inputs (URLs in submit args)", js)
         self.assertIn("Outputs (URLs in result)", js)
 
-    def test_dashboard_js_handles_kamui_double_encoded_result(self):
+    def test_dashboard_js_no_longer_double_parses_kamui_text(self):
         """kamui-code MCP wraps the actual result payload as a JSON
-        string inside `remote_result.content[].text`. The walker has to
-        try-parse string nodes that begin with `{` or `[`, otherwise
-        the output URL (`images[].url` / `video.url`) is invisible to
-        the user — which is exactly the failure mode the lazy-v2.12.0
-        feature is designed to prevent. Sample shape from real jobs:
+        string inside `remote_result.content[].text`. As of Issue #73
+        (lazy-v2.13+) the **worker** annotates those entries with
+        `text_parsed`, so dashboard.js does not (and should not) carry
+        the in-browser `JSON.parse` fallback that earlier versions had.
 
-            "remote_result": {
-              "content": [
-                {"type": "text",
-                 "text": "{\\"video\\":{\\"url\\":\\"https://...\\"}}"}
-              ]
-            }
-        """
+        The actual parsing behavior is pinned by
+        `test_worker_normalize.py::TestNormalizeResultPayload::test_kamui_double_json_*`.
+        Here we just guard against accidental re-introduction of the
+        client-side parser: the obsolete `(parsed text)` path label
+        and the `JSON.parse(trimmed)` call must NOT come back."""
         js = self._read("dashboard.js")
-        # The walker labels embedded JSON paths with "(parsed text)".
-        # Future-proofing: if the label changes, this test catches it.
-        self.assertIn("(parsed text)", js)
+        self.assertNotIn(
+            "(parsed text)", js,
+            "Found '(parsed text)' label — the client-side double-JSON "
+            "parser was reintroduced. The worker now ships text_parsed.",
+        )
+        # The earlier dashboard literally had `JSON.parse(trimmed)`
+        # inside extractUrls. If it comes back, the client and the
+        # worker will both try to expand the same field, leading to
+        # confusing duplicate paths.
+        self.assertNotRegex(
+            js, r"JSON\.parse\(\s*trimmed\s*\)",
+            "extractUrls must not call JSON.parse on string nodes; the "
+            "worker already provides text_parsed (Issue #73).",
+        )
 
     def test_dashboard_js_detects_local_paths(self):
         """kamui-code results carry `local_files` with Windows or

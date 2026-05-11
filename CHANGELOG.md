@@ -1,5 +1,49 @@
 # Changelog
 
+## [Unreleased] — targeting lazy-v2.13.0
+
+### Changed (BREAKING)
+- **`GET /api/jobs/<id>` の `result` フィールドが string → object になります** ([#73](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/issues/73)): これまで `result` は DB に格納された JSON 文字列をそのまま返していました (`args` だけは parse 済み object として返る、という非対称な API)。lazy-v2.13.0 から `result` も object として返り、kamui-code MCP の `remote_result.content[].text` (こちらもさらに JSON 文字列としてエンコードされている) には parse 済みの `text_parsed` フィールドを併記します。
+  - **影響**: `result` を文字列として参照 (`jq -r '.result'` 等) していた外部スクリプトは動作が変わります。本リポジトリ内部 (Python クライアント / CLI / dashboard) の影響箇所は調査・修正済み。
+  - **新形状の例**:
+    ```jsonc
+    {
+      "result": {                                  // ← object (was string)
+        "remote_result": {
+          "content": [{
+            "type": "text",
+            "text": "{\"video\":{\"url\":\"https://...\"}}",  // 原文を保持
+            "text_parsed": {                                  // ← 新規
+              "video": {"url": "https://..."}
+            }
+          }]
+        },
+        "local_files": ["C:\\Users\\..\\out.mp4"],
+        "download_errors": []
+      }
+    }
+    ```
+  - **`text_parsed` のルール**:
+    - `text` が `{` または `[` で始まる string で、JSON parse 可能なら付与
+    - 不正 JSON / prose / 数値などは付与しない (= フィールド非存在)
+    - **ネスト展開は 1 段のみ**: `text_parsed` 内にさらに JSON-as-string が含まれていても再展開しない
+    - 1 MB を超える `text` は parse 試行しない (応答時間ガード)
+  - **`/api/jobs/<id>` の `args` の挙動は変えていません**: 引き続き parse 済み object として返ります。`args` 内の `content[].text` には `text_parsed` は **付与しません** (= submitted args の round-trip 一致を保つため)。
+
+### Added
+- **worker.py に `_normalize_result_payload` / `_normalize_args_payload` / `_annotate_content_text` / `_try_json_loads` を追加** ([#73](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/issues/73)): kamui-code MCP のレスポンス形状の理解を worker 単独の責務に集約。dashboard やその他のクライアントが二重 JSON ロジックを実装しなくて済みます。
+- 新規テスト: `test_worker_normalize.py` (30 tests) — `_try_json_loads` / `_annotate_content_text` / `_normalize_result_payload` / `_normalize_args_payload` の正常系・異常系を pin
+
+### Changed
+- **dashboard.js: `extractUrls` から二重 JSON parse 分岐を削除**: lazy-v2.13.0 worker が `text_parsed` を併記するようになったので、JavaScript 側で `JSON.parse(trimmed)` を呼ぶ必要がなくなりました。`(parsed text)` という path ラベルも消えます。これにより dashboard.js の純粋ロジックが縮小し、kamui-code 固有の応答形状に依存しないシンプルな再帰 walker になります。
+- **dashboard.js: `showJobDetail` の `typeof === "string"` fallback も削除**: `result` は常に object 前提。万一旧 worker (≤ lazy-v2.12) と組み合わせて使われた場合、URL 表面化は劣化しますが ([PR #62](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/pull/65) の version handshake が「worker を再起動してください」と警告を出します)、raw JSON は引き続き `<details>` 内で参照できます。
+- **`test_dashboard_smoke.py::TestJobDetailUrlSurfacing::test_dashboard_js_no_longer_double_parses_kamui_text`**: 旧 `(parsed text)` ラベル要求テストを「`JSON.parse(trimmed)` が dashboard.js に **存在しない**」逆向きの assertion に書き換え、再混入を防止。
+
+### Compatibility
+- **lazy-v2.12.x 以前の worker と lazy-v2.13.0 dashboard の組み合わせ**: 旧 worker は `result` を string、`text_parsed` なしで返します。新 dashboard は `result` が object でないと extractUrls が深く展開できないため、Outputs セクションが空 (もしくは prose URL 抽出だけ) になる可能性があります。raw JSON は引き続き表示可能。**worker と dashboard を同時にアップデートすることを推奨**します (元々 lazy-v2.11+ の worker version handshake が同じ意図で警告を出しています)。
+- **lazy-v2.13.0 worker と lazy-v2.12.x 以前の dashboard の組み合わせ**: 旧 dashboard が `result` を string として `JSON.parse` する fallback ロジックを持っているため、object として返っても問題なく動作します (typeof チェックでスキップされる)。`text_parsed` フィールドは無視されますが、旧 dashboard 自身が二重 JSON 分岐を持つので URL は引き続き見えます。
+- **外部スクリプト / 自前 CLI で `result` を文字列として `jq` 等で扱っているケース**: 動作変化があります。新形状を `jq -r '.result | tojson'` のように再シリアライズすれば従来通り扱えます。
+
 ## [lazy-v2.12.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.12.0) (2026-05-11)
 
 ### Added
