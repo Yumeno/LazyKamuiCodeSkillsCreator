@@ -72,13 +72,20 @@ class TestTryJsonLoads(unittest.TestCase):
     def test_tolerates_leading_whitespace(self):
         self.assertEqual(_try_json_loads("  \n {\"a\": 1}\n"), {"a": 1})
 
-    def test_returns_none_for_oversized_string(self):
-        """Above ~1 MB we refuse to attempt parsing. The exact threshold
-        is implementation-defined; the test just pins that some bound
-        exists so a runaway 50 MB result blob does not crater the
-        worker's response time."""
-        big = "{" + ("a" * 2_000_000) + "}"
-        self.assertIsNone(_try_json_loads(big))
+    def test_parses_large_json_without_size_cap(self):
+        """There is intentionally NO upper size limit on JSON parsing.
+        MCP services that stream large responses or return inline
+        base64 (video, image batches) can legitimately deliver
+        multi-MB ``result`` payloads, and silently dropping back to a
+        string at this layer would break the lazy-v2.13 contract that
+        ``result`` is structured. This test pins that a several-MB
+        valid JSON object parses successfully."""
+        # Build a ~5 MB valid JSON object with a long string value.
+        large_value = "x" * 5_000_000
+        payload = '{"data": "' + large_value + '"}'
+        result = _try_json_loads(payload)
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result, {"data": large_value})
 
 
 # ---------------------------------------------------------------------------

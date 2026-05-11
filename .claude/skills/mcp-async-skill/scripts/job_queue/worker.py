@@ -61,14 +61,6 @@ def _age_seconds(ts: str | None) -> float | None:
     return (datetime.now(timezone.utc) - dt).total_seconds()
 
 
-# Maximum byte length of a `content[].text` field that we'll try to
-# parse as JSON. Above this we leave it alone — the cost of parsing
-# a megabyte of accidental binary-as-text is not worth the chance of
-# finding embedded URLs, and the dashboard already shows the raw text
-# under "Raw JSON".
-_TEXT_PARSE_MAX_BYTES = 1_000_000
-
-
 def _try_json_loads(s: str) -> object | None:
     """Return ``json.loads(s)`` if *s* looks like a JSON object or array,
     otherwise return ``None``. Never raises. Used to expand kamui-code
@@ -79,10 +71,20 @@ def _try_json_loads(s: str) -> object | None:
     Conservative: only attempts parse when the trimmed string starts
     with ``{`` or ``[``. Bare strings, numbers, prose, etc. are never
     misinterpreted as embedded JSON.
+
+    Note on size: there is intentionally **no upper bound** on the
+    input size. MCP services may legitimately return multi-MB payloads
+    (streaming responses, inline base64 video, large batch results),
+    and silently returning ``None`` for an oversized but valid JSON
+    blob would cause the response to fall back to a string at the
+    caller and break the lazy-v2.13 contract that ``result`` is
+    structured. ``json.loads`` itself is fast (O(n)) and capable of
+    handling many MB without trouble. If runaway payload sizes ever
+    become a concern, the right place to enforce a limit is at the
+    network ingress (worker request body cap) or the DB (column size
+    check), not in the middle of a parser.
     """
     if not isinstance(s, str):
-        return None
-    if len(s) > _TEXT_PARSE_MAX_BYTES:
         return None
     t = s.strip()
     if not t or t[0] not in ("{", "["):

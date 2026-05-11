@@ -389,6 +389,30 @@ class TestJobDetailUrlSurfacing(unittest.TestCase):
             "worker already provides text_parsed (Issue #73).",
         )
 
+    def test_dashboard_js_skips_text_when_text_parsed_is_present(self):
+        """When the worker ships `text_parsed` alongside `text` (the
+        canonical lazy-v2.13+ kamui-code shape), the walker must skip
+        the raw `text` field. Otherwise the prose-URL fallback would
+        re-extract the same URLs from the JSON-as-string in `text`,
+        producing duplicate entries that the dedup helper would then
+        have to collapse with confusing path labels.
+
+        We pin this by looking for the `text_parsed` skip guard in
+        `extractUrls`. If a future refactor removes the guard, this
+        test fails with an actionable message pointing at this
+        scenario."""
+        js = self._read("dashboard.js")
+        # The skip is gated on `hasOwnProperty("text_parsed")` so look
+        # for that string near the walker. Tightening the regex would
+        # make the test brittle — this is intentionally loose.
+        self.assertIn(
+            'hasOwnProperty.call(node, "text_parsed")', js,
+            "extractUrls must skip the raw `text` field when its "
+            "sibling `text_parsed` is present, otherwise URLs will "
+            "be extracted twice (once from prose-fallback over the "
+            "JSON string, once from the parsed object). See Issue #73.",
+        )
+
     def test_dashboard_js_detects_local_paths(self):
         """kamui-code results carry `local_files` with Windows or
         POSIX absolute paths. The walker exposes those as a separate

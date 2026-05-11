@@ -394,7 +394,18 @@ function extractUrls(root, opts) {
       return;
     }
     if (typeof node === "object") {
+      // When the worker (lazy-v2.13+) annotates a kamui-code content
+      // entry with `text_parsed`, the structured form supersedes the
+      // raw `text` string for URL extraction purposes. Skipping `text`
+      // here avoids duplicate Outputs entries (one from the structured
+      // walk, one from the prose-fallback regex over the JSON string)
+      // and keeps path labels meaningful. The original `text` is still
+      // visible in the Raw JSON section.
+      const skipText = Object.prototype.hasOwnProperty.call(node, "text_parsed")
+        && Object.prototype.hasOwnProperty.call(node, "text")
+        && typeof node.text === "string";
       for (const key of Object.keys(node)) {
+        if (skipText && key === "text") continue;
         const subpath = path ? path + "." + key : key;
         visit(node[key], subpath, depth + 1);
       }
