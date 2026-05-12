@@ -335,13 +335,16 @@ function looksLikeLocalPath(s) {
 // human-readable JSON path. Duplicate URLs at different paths are kept
 // (the path tells you which one is which).
 //
-// kamui-code MCP returns JSON where the *actual* result payload is a
-// JSON string embedded inside `remote_result.content[].text`. We
-// transparently parse such strings (if and only if they start with
-// `{` or `[` after trim and parse cleanly) and walk into them, marking
-// the path with `(parsed text)` so the user knows where the URL came
-// from. This is the difference between "wow this is great" and "where
-// is my output URL?" in practice.
+// kamui-code MCP wraps the real payload as a JSON-encoded string inside
+// `remote_result.content[].text`. As of Issue #73, the worker side
+// (lazy-v2.13+) annotates those entries with a sibling `text_parsed`
+// field carrying the parsed value, so the walker just naturally
+// recurses into it as an object — no in-browser JSON.parse needed.
+//
+// For older workers that don't ship `text_parsed`, the URL stays
+// buried inside the string. The user-visible symptom is "Outputs
+// section empty even though the job completed"; the version
+// handshake (PR #62) already warns the user to restart the worker.
 //
 // Maximum depth and node count are bounded to keep huge result blobs
 // from freezing the modal.
@@ -362,18 +365,6 @@ function extractUrls(root, opts) {
       if (looksLikeLocalPath(node)) {
         out.push({ path, value: node, kind: classifyLocalPath(node), type: "local" });
         return;
-      }
-      // Embedded JSON (kamui-code wraps the real payload as a JSON
-      // string inside `content[].text`). Parse it transparently.
-      const trimmed = node.trim();
-      if (trimmed.length > 1 &&
-          (trimmed[0] === "{" || trimmed[0] === "[")) {
-        let parsed;
-        try { parsed = JSON.parse(trimmed); } catch { parsed = undefined; }
-        if (parsed !== undefined) {
-          visit(parsed, path + " (parsed text)", depth + 1);
-          return;
-        }
       }
       // Fallback: prose containing URLs (e.g. an error message that
       // mentions one). Only extract if the string is moderately long
@@ -403,7 +394,26 @@ function extractUrls(root, opts) {
       return;
     }
     if (typeof node === "object") {
+      // When the worker (lazy-v2.13+) annotates a kamui-code content
+      // entry with a *non-null object/array* `text_parsed`, the
+      // structured form supersedes the raw `text` string for URL
+      // extraction. Skipping `text` here avoids duplicate Outputs
+      // entries (one from the structured walk, one from the prose-
+      // fallback regex over the JSON string).
+      //
+      // Defensive about edge cases the worker shouldn't produce but a
+      // future client might: `text_parsed: null` or `text_parsed: 42`
+      // are NOT structured forms of `text`, so we keep walking `text`
+      // in those cases — otherwise the URL would silently disappear.
+      const tp = node.text_parsed;
+      const skipText =
+        Object.prototype.hasOwnProperty.call(node, "text_parsed")
+        && tp !== null
+        && typeof tp === "object"
+        && Object.prototype.hasOwnProperty.call(node, "text")
+        && typeof node.text === "string";
       for (const key of Object.keys(node)) {
+        if (skipText && key === "text") continue;
         const subpath = path ? path + "." + key : key;
         visit(node[key], subpath, depth + 1);
       }
@@ -602,12 +612,13 @@ async function showJobDetail(jobId) {
     return;
   }
 
-  // Parse result: API may return it either as already-parsed JSON or as
-  // a raw string (older worker versions). Be defensive.
-  let resultObj = data.result;
-  if (typeof resultObj === "string") {
-    try { resultObj = JSON.parse(resultObj); } catch { /* leave as string */ }
-  }
+  // As of lazy-v2.13 (Issue #73) the worker returns `result` as a
+  // fully-parsed object with kamui-code's content[].text annotated as
+  // `text_parsed`. Older workers (≤ lazy-v2.12) return `result` as a
+  // raw string and the URL extraction will be limited to whatever the
+  // walker can find on the surface — the version-handshake warning in
+  // the header tells the user to restart the worker in that case.
+  const resultObj = data.result;
   const argsObj = data.args;
 
   const inputUrls = dedupeUrlEntries(
