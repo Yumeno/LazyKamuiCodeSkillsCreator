@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] — targeting lazy-v2.13.0
+## [lazy-v2.13.0](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/releases/tag/lazy-v2.13.0) (2026-05-12)
 
 ### Changed (BREAKING)
 - **`GET /api/jobs/<id>` の `result` フィールドが、有効な JSON object/array なら parse 済み object として返るようになります** ([#73](https://github.com/Yumeno/LazyKamuiCodeSkillsCreator/issues/73)): これまで `result` は DB に格納された JSON 文字列をそのまま返していました (`args` だけは parse 済み object として返る、という非対称な API)。lazy-v2.13.0 から `result` も parse 済み object として返り、加えて kamui-code MCP の `remote_result.content[].text` (こちらもさらに JSON 文字列としてエンコードされている) には parse 済みの `text_parsed` フィールドを併記します。
