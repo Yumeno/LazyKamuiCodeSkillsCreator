@@ -38,8 +38,12 @@ from job_queue.worker import (  # noqa: E402
 
 class TestTryJsonLoads(unittest.TestCase):
     """The low-level helper that decides whether a string looks like
-    JSON and parses it without raising. Used by both the result and
-    args normalizers, so its conservatism matters."""
+    JSON and parses it without raising. Used by the result normalizer
+    (and by ``_annotate_content_text``) to decide whether
+    ``content[].text`` looks like an embedded JSON payload worth
+    expanding into ``text_parsed``. The args normalizer intentionally
+    does **not** route through this helper — see Codex re-review #6
+    in PR #75 for why."""
 
     def test_parses_object_string(self):
         self.assertEqual(_try_json_loads('{"a": 1}'), {"a": 1})
