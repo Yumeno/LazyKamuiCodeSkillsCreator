@@ -11,7 +11,7 @@
 # `Stamp version into __init__.py` step in `.github/workflows/release.yml`.
 # The release workflow validates that the rewrite succeeded before tagging,
 # so a missing or malformed `__version__` here will fail CI.
-__version__ = "2.12.0"
+__version__ = "2.13.0"
 
 # Default maximum number of poll attempts before timeout.
 # With a default poll_interval of 2.0s, 3000 polls ≈ 100 minutes.
