@@ -5,6 +5,30 @@
 
 Claude Code用のMCPスキルジェネレーター。非同期ジョブパターン（submit/status/result）を使用するHTTP MCPサーバーからスキルを生成します。
 
+> ## ⚠️ メンテナンス終了のお知らせ
+>
+> 本リポジトリは**メンテナンスを終了しました**。今後の機能追加・不具合修正は予定していません。
+>
+> スキル生成に使用するツールカタログ `mcp_tool_catalog.yaml` は、これまで [Yumeno/kamuicode-config-manager](https://github.com/Yumeno/kamuicode-config-manager) リポジトリで生成・配信していました（取得先URLは `generate_skill.py` の `CATALOG_URL` 定数に定義）。
+>
+> このカタログも**更新を終了**しており（同リポジトリで案内済み）、既定の取得先からは最新のツール情報を取得できません（将来的にアクセス不能になる可能性もあります）。
+>
+> ### 📌 後継URLが提供された場合の対応
+>
+> どなたかが後継のカタログをホストした場合、本リポジトリのコードを変更せずに `--catalog-url` で切り替えられます：
+>
+> ```bash
+> python scripts/generate_skill.py \
+>   --mcp-config /path/to/.mcp.json \
+>   --catalog-url https://<後継URL>/mcp_tool_catalog.yaml
+> ```
+>
+> 後継URLは raw テキストで `mcp_tool_catalog.yaml` を返すものであれば、GitHub raw に限らず任意のHTTPSエンドポイントを指定できます。ローカルにカタログを保存して使う方法を含む詳細は、[引き継ぎ文書](docs/MAINTENANCE-HANDOVER.md) を参照してください。
+>
+> ### 🔧 フォークして継続したい方へ
+>
+> 本プロジェクトをフォークして開発を継続する、あるいは後継カタログをホストするメンテナー向けに、設計と引き継ぎ事項をまとめた [引き継ぎ文書 (docs/MAINTENANCE-HANDOVER.md)](docs/MAINTENANCE-HANDOVER.md) を用意しています。
+
 ## 🆕 このフォークの追加機能
 
 オリジナル版からの主な機能追加：
